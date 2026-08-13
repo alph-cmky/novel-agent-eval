@@ -23,3 +23,8 @@ module-root = ""
 
 [tool.uv.sources]
 novel-agent = { path = "../novel-agent" }
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: 集成测试，需要真实 LLM API（无 key 时 skip）",
+]

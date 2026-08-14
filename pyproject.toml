@@ -22,7 +22,7 @@ build-backend = "uv_build"
 module-root = ""
 
 [tool.uv.sources]
-novel-agent = { path = "../novel-agent" }
+novel-agent = { path = "../novel-agent", editable = true }
 
 [tool.pytest.ini_options]
 markers = [

@@ -68,14 +68,23 @@ class NovelWritingAgentAdapter(AgentAdapter):
         return workdir / "config" / "config.yaml"
 
     def _write_config(self, workdir: Path) -> str | None:
-        """model 非空时向 workdir/config/config.yaml 写注入配置，返回原内容。
+        """向 workdir/config/config.yaml 写入配置，返回原内容（供 _restore_config 恢复）。
 
-        原内容只可能是 None：workdir 是每次 generate 新建的临时目录，不存在
-        既有 config.yaml。返回类型保留 str | None 以覆盖写入失败/恢复的通用语义。
+        - model 非空：写注入配置（provider: openai，OpenAI 兼容端点），返回 workdir
+          既有内容（临时目录下通常为 None）。
+        - model 为 None（原生配置）：把 repo_dir/config/config.yaml 拷贝到
+          workdir/config/config.yaml——run_with_llm 按相对 cwd 读 config/config.yaml，
+          而 cwd 是临时 workdir，故须把仓库既有配置拷过去（拷贝不改仓库）。
+          仓库无 config.yaml 时 raise 清晰错误。
         """
-        if self._model is None:
-            return None
         cfg = self._config_path(workdir)
+        if self._model is None:
+            repo_cfg = self._repo_dir / "config" / "config.yaml"
+            if not repo_cfg.exists():
+                raise RuntimeError(f"model=None 需用仓库原生配置，但仓库无 config/config.yaml：{repo_cfg}")
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(repo_cfg, cfg)
+            return None
         original = cfg.read_text(encoding="utf-8") if cfg.exists() else None
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text(self._render_config(), encoding="utf-8")
@@ -91,10 +100,11 @@ class NovelWritingAgentAdapter(AgentAdapter):
             cfg.write_text(original, encoding="utf-8")
 
     @staticmethod
-    def _read_output(repo_dir: Path, workdir: Path) -> str:
+    def _read_output(workdir: Path) -> str:
         """读 workspace/novel_projects/<project_id>/outputs/chapters/chapter_001_*.md。
 
-        取 revision 优先，回退 draft；project_id 为运行自动生成，取最新目录。
+        revision 优先，回退 draft；project_id 为运行自动生成，临时 workdir 下通常
+        只有一个 project（多个时取 glob 首个匹配，不保证时序）。产物为空则 raise。
         """
         base = workdir / "workspace" / "novel_projects"
         candidates = list(base.glob("*/outputs/chapters/chapter_001_*.md"))
@@ -102,7 +112,11 @@ class NovelWritingAgentAdapter(AgentAdapter):
             raise RuntimeError(f"NovelWritingAgent 未生成章节产物：{base}")
         # revision 优先于 draft
         rev = [p for p in candidates if p.name == "chapter_001_revision.md"]
-        return (rev[0] if rev else candidates[0]).read_text(encoding="utf-8").strip()
+        path = rev[0] if rev else candidates[0]
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            raise RuntimeError(f"NovelWritingAgent 产物为空：{path}")
+        return content
 
     async def generate(self, case: EvalCase) -> GeneratedChapter:
         self._check_repo()
@@ -110,8 +124,10 @@ class NovelWritingAgentAdapter(AgentAdapter):
         # 隔离不同 case 的产物，避免串读。但 examples.run_with_llm 依赖仓库内包，
         # 需用 PYTHONPATH 指向 repo_dir，cwd 设为临时目录。
         workdir = Path(tempfile.mkdtemp(prefix="nwa_eval_"))
-        original = self._write_config(workdir)
+        original = None
         try:
+            # _write_config 在 model=None 且仓库无配置时会 raise，须在 try 内以免 workdir 泄漏
+            original = self._write_config(workdir)
             cmd = [
                 "python", "-m", "examples.run_with_llm",
                 "--title", case.name,
@@ -124,11 +140,17 @@ class NovelWritingAgentAdapter(AgentAdapter):
                 *cmd, cwd=str(workdir), env=env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+            except TimeoutError:
+                # wait_for 只 cancel communicate()，不杀子进程；kill 后 wait 回收，防孤儿进程
+                proc.kill()
+                await proc.wait()
+                raise
             elapsed = time.monotonic() - start
             if proc.returncode != 0:
                 raise RuntimeError(f"NovelWritingAgent 退出码 {proc.returncode}：{stderr.decode('utf-8', 'replace')[-1000:]}")
-            content = self._read_output(self._repo_dir, workdir)
+            content = self._read_output(workdir)
             return GeneratedChapter(content=content, meta={
                 "adapter": self.name,
                 "model": self._model.model if self._model else None,

@@ -145,6 +145,38 @@ def test_run_raises_on_nonzero_exit(monkeypatch):
         asyncio.run(InkOSAdapter()._run(["inkos"], Path("/tmp"), {}))
 
 
+def test_run_kills_proc_on_timeout(monkeypatch):
+    class _HangingProc:
+        def __init__(self):
+            self.killed = False
+            self.waited = False
+
+        async def communicate(self):
+            await asyncio.sleep(60)
+            return b"", b""
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            self.waited = True
+            return -9
+
+    proc = _HangingProc()
+
+    async def _fake(*args, **kwargs):
+        return proc
+
+    monkeypatch.setattr(
+        "novel_agent_eval.agents.inkos.asyncio.create_subprocess_exec", _fake
+    )
+    with pytest.raises(TimeoutError):
+        asyncio.run(InkOSAdapter(timeout=0.01)._run(["inkos"], Path("/tmp"), {}))
+    # 超时后子进程必须被 kill + wait 回收，不能留孤儿进程
+    assert proc.killed
+    assert proc.waited
+
+
 # ── _brief_file ──────────────────────────────────────────
 
 
@@ -164,6 +196,14 @@ def test_read_output_reads_first_chapter(tmp_path):
 
 def test_read_output_raises_when_missing(tmp_path):
     with pytest.raises(RuntimeError, match="InkOS 未生成"):
+        InkOSAdapter._read_output(tmp_path)
+
+
+def test_read_output_raises_when_content_empty(tmp_path):
+    (tmp_path / "books/x/chapters").mkdir(parents=True)
+    (tmp_path / "books/x/chapters/0001_第一章.md").write_text("   \n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="产物为空"):
         InkOSAdapter._read_output(tmp_path)
 
 

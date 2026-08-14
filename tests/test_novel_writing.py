@@ -125,12 +125,25 @@ def test_write_config_writes_to_workdir_and_restores(tmp_path):
     assert cfg.read_text(encoding="utf-8") == "original-config"
 
 
-def test_write_config_none_model_is_noop(tmp_path):
+def test_write_config_model_none_copies_repo_config(tmp_path):
     repo_dir = _repo_with_entry(tmp_path)
+    repo_cfg = repo_dir / "config" / "config.yaml"
+    repo_cfg.parent.mkdir(parents=True)
+    repo_cfg.write_text("repo-native-config", encoding="utf-8")
     workdir = tmp_path / "workdir"
+
     adapter = NovelWritingAgentAdapter(repo_dir=repo_dir)  # model=None
     assert adapter._write_config(workdir) is None
-    assert not (workdir / "config" / "config.yaml").exists()
+    assert (workdir / "config" / "config.yaml").read_text(encoding="utf-8") == "repo-native-config"
+    # 拷贝不改仓库
+    assert repo_cfg.read_text(encoding="utf-8") == "repo-native-config"
+
+
+def test_write_config_model_none_raises_when_repo_no_config(tmp_path):
+    repo_dir = _repo_with_entry(tmp_path)
+    adapter = NovelWritingAgentAdapter(repo_dir=repo_dir)  # model=None 且仓库无 config
+    with pytest.raises(RuntimeError, match="仓库无 config/config.yaml"):
+        adapter._write_config(tmp_path / "workdir")
 
 
 def test_restore_config_deletes_when_no_original(tmp_path):
@@ -153,7 +166,7 @@ def test_read_output_prefers_revision(tmp_path):
     (base / "chapter_001_draft.md").write_text("draft", encoding="utf-8")
     (base / "chapter_001_revision.md").write_text("revision", encoding="utf-8")
 
-    out = NovelWritingAgentAdapter._read_output(tmp_path, tmp_path)
+    out = NovelWritingAgentAdapter._read_output(tmp_path)
     assert out == "revision"
 
 
@@ -162,13 +175,22 @@ def test_read_output_falls_back_to_draft(tmp_path):
     base.mkdir(parents=True)
     (base / "chapter_001_draft.md").write_text("draft", encoding="utf-8")
 
-    out = NovelWritingAgentAdapter._read_output(tmp_path, tmp_path)
+    out = NovelWritingAgentAdapter._read_output(tmp_path)
     assert out == "draft"
 
 
-def test_read_output_raises_when_empty(tmp_path):
+def test_read_output_raises_when_missing(tmp_path):
     with pytest.raises(RuntimeError, match="未生成章节产物"):
-        NovelWritingAgentAdapter._read_output(tmp_path, tmp_path)
+        NovelWritingAgentAdapter._read_output(tmp_path)
+
+
+def test_read_output_raises_when_content_empty(tmp_path):
+    base = tmp_path / "workspace" / "novel_projects" / "p1" / "outputs" / "chapters"
+    base.mkdir(parents=True)
+    (base / "chapter_001_draft.md").write_text("   \n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="产物为空"):
+        NovelWritingAgentAdapter._read_output(tmp_path)
 
 
 # ── generate 全链路（mock subprocess + _read_output） ────
@@ -182,7 +204,7 @@ def test_generate_returns_content_and_meta(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         NovelWritingAgentAdapter, "_read_output",
-        staticmethod(lambda r, w: "固定正文"),
+        staticmethod(lambda w: "固定正文"),
     )
     adapter = NovelWritingAgentAdapter(repo_dir=repo_dir, model=_make_model())
     gen = asyncio.run(adapter.generate(_make_case()))
@@ -196,12 +218,76 @@ def test_generate_returns_content_and_meta(monkeypatch, tmp_path):
     assert not (repo_dir / "config" / "config.yaml").exists()
 
 
+def test_generate_model_none_copies_repo_config(monkeypatch, tmp_path):
+    repo_dir = _repo_with_entry(tmp_path)
+    repo_cfg = repo_dir / "config" / "config.yaml"
+    repo_cfg.parent.mkdir(parents=True)
+    repo_cfg.write_text("repo-native-config", encoding="utf-8")
+    monkeypatch.setattr(
+        "novel_agent_eval.agents.novel_writing.asyncio.create_subprocess_exec",
+        _fake_subprocess,
+    )
+    monkeypatch.setattr(
+        NovelWritingAgentAdapter, "_read_output",
+        staticmethod(lambda w: "固定正文"),
+    )
+    adapter = NovelWritingAgentAdapter(repo_dir=repo_dir)  # model=None → 用仓库原生配置
+    gen = asyncio.run(adapter.generate(_make_case()))
+
+    assert gen.content == "固定正文"
+    assert gen.meta["model"] is None
+    # 仓库 config 未被修改（拷贝到 workdir，不改 repo）
+    assert repo_cfg.read_text(encoding="utf-8") == "repo-native-config"
+
+
+def test_generate_model_none_raises_when_repo_no_config(monkeypatch, tmp_path):
+    repo_dir = _repo_with_entry(tmp_path)
+    adapter = NovelWritingAgentAdapter(repo_dir=repo_dir)  # model=None 且仓库无 config
+    with pytest.raises(RuntimeError, match="仓库无 config/config.yaml"):
+        asyncio.run(adapter.generate(_make_case()))
+
+
 def test_generate_raises_on_nonzero_exit(monkeypatch, tmp_path):
     repo_dir = _repo_with_entry(tmp_path)
     monkeypatch.setattr(
         "novel_agent_eval.agents.novel_writing.asyncio.create_subprocess_exec",
         _fake_failing_subprocess,
     )
-    adapter = NovelWritingAgentAdapter(repo_dir=repo_dir)
+    adapter = NovelWritingAgentAdapter(repo_dir=repo_dir, model=_make_model())
     with pytest.raises(RuntimeError, match="退出码 1"):
         asyncio.run(adapter.generate(_make_case()))
+
+
+def test_generate_kills_proc_on_timeout(monkeypatch, tmp_path):
+    repo_dir = _repo_with_entry(tmp_path)
+
+    class _HangingProc:
+        def __init__(self):
+            self.killed = False
+            self.waited = False
+
+        async def communicate(self):
+            await asyncio.sleep(60)
+            return b"", b""
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            self.waited = True
+            return -9
+
+    proc = _HangingProc()
+
+    async def _fake(*args, **kwargs):
+        return proc
+
+    monkeypatch.setattr(
+        "novel_agent_eval.agents.novel_writing.asyncio.create_subprocess_exec", _fake
+    )
+    adapter = NovelWritingAgentAdapter(repo_dir=repo_dir, model=_make_model(), timeout=0.01)
+    with pytest.raises(TimeoutError):
+        asyncio.run(adapter.generate(_make_case()))
+    # 超时后子进程必须被 kill + wait 回收，不能留孤儿进程
+    assert proc.killed
+    assert proc.waited

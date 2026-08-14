@@ -83,7 +83,13 @@ class InkOSAdapter(AgentAdapter):
             *cmd, cwd=str(cwd), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
+        except TimeoutError:
+            # wait_for 只 cancel communicate()，不杀子进程；kill 后 wait 回收，防孤儿进程
+            proc.kill()
+            await proc.wait()
+            raise
         out = stdout.decode("utf-8", "replace")
         err = stderr.decode("utf-8", "replace")
         if proc.returncode != 0:
@@ -99,11 +105,14 @@ class InkOSAdapter(AgentAdapter):
 
     @staticmethod
     def _read_output(workdir: Path) -> str:
-        """读 books/<书名>/chapters/0001_*.md（首个匹配，未生成则 raise）。"""
+        """读 books/<书名>/chapters/0001_*.md（首个匹配；未生成或内容为空则 raise）。"""
         matches = sorted(workdir.glob("books/*/chapters/0001_*.md"))
         if not matches:
             raise RuntimeError("InkOS 未生成 books/*/chapters/0001_*.md 产物")
-        return matches[0].read_text(encoding="utf-8").strip()
+        content = matches[0].read_text(encoding="utf-8").strip()
+        if not content:
+            raise RuntimeError(f"InkOS 产物为空：{matches[0]}")
+        return content
 
     async def generate(self, case: EvalCase) -> GeneratedChapter:
         direction = build_inkos_direction(case)

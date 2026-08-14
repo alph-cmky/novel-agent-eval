@@ -58,6 +58,9 @@ class VanillaLLMAdapter:
             messages=[{"role": "user", "content": prompt}],
             temperature=0.85,
             max_tokens=max_tokens,
+            # 对齐 Judge 与主仓库：step-3.7-flash 是 reasoning 模型，max_tokens 同时
+            # 计入推理 token；reasoning_effort=low 压推理深度，防止正文被挤空。
+            reasoning_effort="low",
         )
         elapsed = time.monotonic() - start
 

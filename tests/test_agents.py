@@ -89,6 +89,7 @@ def test_vanilla_passes_model_and_prompt_to_client():
     assert kwargs["model"] == "my-model"
     assert kwargs["messages"][0]["role"] == "user"
     assert "本章大纲" in kwargs["messages"][0]["content"]
+    assert kwargs["reasoning_effort"] == "low"
 
 
 def test_vanilla_empty_content_is_tolerated():

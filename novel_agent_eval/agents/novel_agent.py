@@ -18,7 +18,7 @@ import zlib
 
 from langgraph.types import Command
 
-from novel_agent.graph.chapter import build_chapter_graph_async
+from novel_agent.graph.chapter import aclose_checkpointers, build_chapter_graph_async
 
 from novel_agent_eval.dataset.schema import EvalCase
 from novel_agent_eval.agents.base import AgentAdapter, GeneratedChapter
@@ -151,16 +151,11 @@ class NovelAgentAdapter:
 
             elapsed = time.monotonic() - start
         finally:
-            # 关掉 AsyncSqliteSaver 的 aiosqlite 连接：其 _connection_worker_thread
-            # 是非守护线程，不关会在解释器退出时永久阻塞（进程挂死）。
-            # MemorySaver 无 .conn，getattr 兜底。
-            checkpointer = getattr(graph, "checkpointer", None)
-            conn = getattr(checkpointer, "conn", None)
-            if conn is not None:
-                try:
-                    await conn.close()
-                except Exception:
-                    pass
+            # 关掉 AsyncSqliteSaver 的 aiosqlite 连接：其 worker thread 是非守护
+            # 线程，不关会在解释器退出时永久阻塞（进程挂死）。用主仓库公开的
+            # aclose_checkpointers() 统一收口（close 全部 + 清 cache），替代过去
+            # 直接 reach graph.checkpointer.conn 的脆弱写法。
+            await aclose_checkpointers()
             if cleanup:
                 cleanup()
 

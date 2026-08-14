@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Downloaded external datasets (not committed)
+# brief 写的是 dataset/external/，但中间斜杠的 pattern 锚定仓库根目录，
+# 匹配不到实际路径 novel_agent_eval/dataset/external/；用 **/ 覆盖任意层级。
+**/dataset/external/

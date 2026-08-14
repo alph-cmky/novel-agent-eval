@@ -1887,7 +1887,7 @@ wheels = [
 [[package]]
 name = "novel-agent"
 version = "0.1.0"
-source = { directory = "../novel-agent" }
+source = { editable = "../novel-agent" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "chainlit" },
@@ -1955,7 +1955,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "novel-agent", directory = "../novel-agent" },
+    { name = "novel-agent", editable = "../novel-agent" },
     { name = "openai", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pytest", specifier = ">=9.1.1" },

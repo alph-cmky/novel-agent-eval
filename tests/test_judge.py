@@ -92,3 +92,37 @@ def test_score_garbage_retries_then_all_zero():
     assert set(score.dimensions) == set(QUALITY_DIMS)
     assert all(v == 0 for v in score.dimensions.values())
     assert score.overall == 0
+
+
+def test_score_accepts_flat_dimensions():
+    # 模型平铺输出 8 维（漏 dimensions 外壳）+ overall → 首次即成功，不重试
+    flat = {"consistency": 85, "writing": 78, "ai_flavor": 72, "dialogue": 80,
+            "plot": 75, "instruction": 90, "creativity": 70, "controllability": 65,
+            "overall": 77}
+    client = _FakeClient(json.dumps(flat, ensure_ascii=False))
+    score = _run(client)
+    assert client.chat.completions.calls == 1
+    assert score.dimensions["consistency"] == 85
+    assert score.dimensions["controllability"] == 65
+    assert score.overall == 77
+
+
+def test_score_accepts_flat_dimensions_missing_dim():
+    # 平铺但缺一个维度 → 重试后 0 兜底（与嵌套缺失维度行为一致）
+    flat = {"consistency": 85, "writing": 78, "ai_flavor": 72, "dialogue": 80,
+            "plot": 75, "instruction": 90, "creativity": 70, "overall": 77}
+    client = _FakeClient(json.dumps(flat, ensure_ascii=False))
+    score = _run(client)
+    assert client.chat.completions.calls == 3
+    assert score.dimensions["controllability"] == 0
+    assert score.dimensions["consistency"] == 85
+
+
+def test_score_accepts_flat_without_overall():
+    # 平铺 8 维全 + 无 overall → overall 退化为 8 维平均
+    flat = {"consistency": 80, "writing": 80, "ai_flavor": 80, "dialogue": 80,
+            "plot": 80, "instruction": 80, "creativity": 80, "controllability": 80}
+    client = _FakeClient(json.dumps(flat, ensure_ascii=False))
+    score = _run(client)
+    assert client.chat.completions.calls == 1
+    assert score.overall == 80

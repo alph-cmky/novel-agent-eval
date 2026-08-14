@@ -162,8 +162,24 @@ def _coerce_score(v) -> int | None:
     return max(0, min(100, i))
 
 
-def _has_full_dims(data: dict) -> bool:
+def _extract_dims(data: dict | None) -> dict:
+    """从 Judge 输出提取 8 维分值 dict，兼容嵌套与平铺两种格式。
+
+    step-3.7-flash（reasoning 模型）常把 8 维平铺到顶层（漏 dimensions 外壳、
+    漏 overall），实测 content 形如 {"consistency": 20, "writing": 10, ...}。
+    此处把嵌套 {"dimensions": {...}} 与平铺格式统一成维度 dict。
+    """
+    if not isinstance(data, dict):
+        return {}
     dims = data.get("dimensions")
+    if isinstance(dims, dict):
+        return dims
+    # 平铺格式：8 维键直接在顶层
+    return {d: data.get(d) for d in QUALITY_DIMS if d in data}
+
+
+def _has_full_dims(data: dict) -> bool:
+    dims = _extract_dims(data)
     return isinstance(dims, dict) and all(d in dims for d in QUALITY_DIMS)
 
 
@@ -183,20 +199,25 @@ class Judge:
         self._max_attempts = max_attempts  # 初次 + 最多 2 次重试
 
     async def _request(self, prompt: str) -> str:
+        # step-3.7-flash 是 reasoning 模型，这里的三项设置都是实测校准：
+        # - max_tokens=8192：2048 会让真实 Judge prompt（rubric + 全文 draft）的
+        #   content 被 reasoning 挤空（实测 4096 仍 finish=length，8192 才稳定产出）。
+        # - reasoning_effort="low"：官方入参（low/medium/high），把 reasoning 从 ~6800
+        #   压到 ~2700 token，减少间歇空 content 与 step-3.7 已知的 overthinking
+        #   （default 档会把 instruction 维打到 35 这类极端分），打分质量不降反稳。
         resp = await self._client.chat.completions.create(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
-            max_tokens=2048,
+            max_tokens=8192,
+            reasoning_effort="low",
         )
         return resp.choices[0].message.content or ""
 
     @staticmethod
     def _to_score(data: dict | None) -> JudgeScore:
         """把（可能不完整的）解析结果规范化为 JudgeScore：缺失维度给 0；overall 缺失退化为 8 维平均。"""
-        dims = (data or {}).get("dimensions")
-        if not isinstance(dims, dict):
-            dims = {}
+        dims = _extract_dims(data)
         normalized = {d: (_coerce_score(dims.get(d)) or 0) for d in QUALITY_DIMS}
         overall = _coerce_score((data or {}).get("overall"))
         if overall is None:

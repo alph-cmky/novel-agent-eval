@@ -136,8 +136,11 @@ class NovelAgentAdapter:
                 pass
 
             final_state = await graph.aget_state(config)
-            if final_state and final_state.next:
-                # 流水线在 human_review interrupt 处暂停 → 评测场景自动 approve
+            # 流水线在 human_review interrupt 处暂停 → 评测场景自动 approve。
+            # while 循环排空所有 interrupt：graph 可能多轮 interrupt（例如
+            # reject→rewrite→再次 human_review），单次 resume 会返回未走完的
+            # state，悄悄污染评测结果。每次 resume 后重新 aget_state，直到 next 为空。
+            while final_state and final_state.next:
                 async for _ in graph.astream_events(
                     Command(resume={"action": "approve", "comments": ""}),
                     config,

@@ -184,11 +184,13 @@ class _RecordingAdapter:
 
     name = "recording_adapter"
     constructed = []
+    generate_calls = 0
 
     def __init__(self, **kwargs):
         _RecordingAdapter.constructed.append(dict(kwargs))
 
     async def generate(self, case: EvalCase) -> GeneratedChapter:
+        _RecordingAdapter.generate_calls += 1
         return GeneratedChapter("draft", _meta(elapsed=30, rounds=0))
 
 
@@ -221,6 +223,21 @@ def test_run_ablation_raises_for_unimplemented_modules(monkeypatch):
     for bad in ["no_continuity", "no_worldbuilding", "no_orchestrator_llm", "unknown_x"]:
         with pytest.raises(NotImplementedError):
             _run(BenchmarkRunner(judge).run_ablation(_case(), modules=[bad]))
+
+
+def test_run_ablation_raises_before_generating(monkeypatch):
+    """无效消融名在 baseline run_case 前即 raise：generate 从未被调用（不浪费一次付费生成）。"""
+    import novel_agent_eval.runner as runner_mod
+
+    _RecordingAdapter.constructed = []
+    _RecordingAdapter.generate_calls = 0
+    monkeypatch.setattr(runner_mod, "NovelAgentAdapter", _RecordingAdapter)
+    judge = FakeJudge(_fixed_score())
+
+    with pytest.raises(NotImplementedError):
+        _run(BenchmarkRunner(judge).run_ablation(_case(), modules=["no_continuity"]))
+
+    assert _RecordingAdapter.generate_calls == 0
 
 
 # ── compare：跑分卡 ─────────────────────────────────────

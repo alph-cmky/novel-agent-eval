@@ -235,9 +235,7 @@ class BenchmarkRunner:
         n = self._repeat if repeat is None else repeat
         results: dict[str, BenchmarkResult] = {}
 
-        baseline_cfg = _ABLATION_REGISTRY["baseline"]
-        results["baseline"] = await self.run_case(baseline_cfg["factory"](), case, n)
-
+        # 先校验全部消融名，再跑基线 —— 未实现/未知配置在任何 run_case（付费生成）前即 raise。
         for name in modules:
             cfg = _ABLATION_REGISTRY.get(name)
             if cfg is None:
@@ -250,7 +248,12 @@ class BenchmarkRunner:
                     f"消融配置 {name!r} 未实现{extra}：主仓库 build_chapter_graph_async "
                     f"目前只有 evolution_enabled 一个开关，需主仓库加细粒度开关后实现"
                 )
-            results[name] = await self.run_case(cfg["factory"](), case, n)
+
+        baseline_cfg = _ABLATION_REGISTRY["baseline"]
+        results["baseline"] = await self.run_case(baseline_cfg["factory"](), case, n)
+
+        for name in modules:
+            results[name] = await self.run_case(_ABLATION_REGISTRY[name]["factory"](), case, n)
         return results
 
     # -- run_suite：agent × case 两重循环 --

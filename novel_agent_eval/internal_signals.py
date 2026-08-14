@@ -15,7 +15,7 @@
 """
 from dataclasses import dataclass
 
-from novel_agent.graph.evolution import EDITOR_DIMENSIONS, composite_score, extract_scores
+from novel_agent.graph.evolution import composite_score, extract_scores
 
 # Continuity 3 类不一致（对齐 novel_agent/agents/continuity.py 的 category 枚举）
 CONTINUITY_CATEGORIES = ("character", "timeline", "worldbuilding")

@@ -4,6 +4,14 @@
 NovelWritingAgent 是 Python 包，但接口是 CLI 入口（examples.run_with_llm），模型走
 config/config.yaml。适配器需传入 repo_dir（已 checkout 的仓库路径，本任务不负责安装）。
 模型非空时临时写 config.yaml，跑完恢复；未传 model 则用仓库既有配置不动。
+
+实测校准（Task 13 冒烟）：
+- run_with_llm 用相对路径读 config/config.yaml 与 workspace/，都相对 cwd 解析
+  （examples/run_with_llm.py:27 / :56）。因此模型注入的 config.yaml 必须写在
+  cwd（临时工作目录）里，而非 repo_dir；产物也读 cwd/workspace/...。
+- provider 枚举只有 anthropic/openai（novel_writing_agent/schema/schema.py），
+  无 custom。OpenAI 兼容第三方端点用 provider: openai，api_base 原样使用
+  （llm/llm_wrapper.py 对非 MiniMax 域名不追加后缀）。
 """
 import asyncio
 import os
@@ -47,23 +55,36 @@ class NovelWritingAgentAdapter(AgentAdapter):
             f"api_key: {self._model.api_key}\n"
             f"api_base: {self._model.base_url}\n"
             f"model: {self._model.model}\n"
-            f"provider: custom\n"
+            f"provider: openai\n"
         )
 
-    def _write_config(self) -> str | None:
-        """model 非空时写 config/config.yaml，返回原内容（None 表示原无该文件）。"""
+    @staticmethod
+    def _config_path(workdir: Path) -> Path:
+        """模型注入时写入的 config.yaml 路径：必须在 cwd（临时工作目录）。
+
+        run_with_llm 用相对路径 Path("config/config.yaml") 读配置，故写到
+        workdir/config/config.yaml 才能在 cwd=workdir 时被读到。
+        """
+        return workdir / "config" / "config.yaml"
+
+    def _write_config(self, workdir: Path) -> str | None:
+        """model 非空时向 workdir/config/config.yaml 写注入配置，返回原内容。
+
+        原内容只可能是 None：workdir 是每次 generate 新建的临时目录，不存在
+        既有 config.yaml。返回类型保留 str | None 以覆盖写入失败/恢复的通用语义。
+        """
         if self._model is None:
             return None
-        cfg = self._repo_dir / "config" / "config.yaml"
+        cfg = self._config_path(workdir)
         original = cfg.read_text(encoding="utf-8") if cfg.exists() else None
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text(self._render_config(), encoding="utf-8")
         return original
 
-    def _restore_config(self, original: str | None) -> None:
+    def _restore_config(self, original: str | None, workdir: Path) -> None:
         if self._model is None:
             return
-        cfg = self._repo_dir / "config" / "config.yaml"
+        cfg = self._config_path(workdir)
         if original is None:
             cfg.unlink(missing_ok=True)
         else:
@@ -89,7 +110,7 @@ class NovelWritingAgentAdapter(AgentAdapter):
         # 隔离不同 case 的产物，避免串读。但 examples.run_with_llm 依赖仓库内包，
         # 需用 PYTHONPATH 指向 repo_dir，cwd 设为临时目录。
         workdir = Path(tempfile.mkdtemp(prefix="nwa_eval_"))
-        original = self._write_config()
+        original = self._write_config(workdir)
         try:
             cmd = [
                 "python", "-m", "examples.run_with_llm",
@@ -115,5 +136,5 @@ class NovelWritingAgentAdapter(AgentAdapter):
                 "tokens": None,
             })
         finally:
-            self._restore_config(original)
+            self._restore_config(original, workdir)
             shutil.rmtree(workdir, ignore_errors=True)

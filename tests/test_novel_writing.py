@@ -102,39 +102,46 @@ def test_render_config_contains_all_fields():
     assert "api_key: k" in cfg
     assert "api_base: https://api.stepfun.test/v1" in cfg
     assert "model: step-3.7-flash" in cfg
-    assert "provider: custom" in cfg
+    # 实测校准：NwA 的 LLMProvider 枚举只有 anthropic/openai，无 custom；
+    # OpenAI 兼容第三方端点用 openai，api_base 原样使用。
+    assert "provider: openai" in cfg
 
 
-def test_write_config_returns_original_and_restore(tmp_path):
+def test_write_config_writes_to_workdir_and_restores(tmp_path):
     repo_dir = _repo_with_entry(tmp_path)
-    cfg = repo_dir / "config" / "config.yaml"
+    workdir = tmp_path / "workdir"
+    cfg = workdir / "config" / "config.yaml"
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text("original-config", encoding="utf-8")
 
     adapter = NovelWritingAgentAdapter(repo_dir=repo_dir, model=_make_model())
-    original = adapter._write_config()
+    original = adapter._write_config(workdir)
     assert original == "original-config"
     assert "api_key: k" in cfg.read_text(encoding="utf-8")
+    # 注入的 config 写在 cwd（workdir），不落在 repo_dir
+    assert not (repo_dir / "config" / "config.yaml").exists()
 
-    adapter._restore_config(original)
+    adapter._restore_config(original, workdir)
     assert cfg.read_text(encoding="utf-8") == "original-config"
 
 
 def test_write_config_none_model_is_noop(tmp_path):
     repo_dir = _repo_with_entry(tmp_path)
+    workdir = tmp_path / "workdir"
     adapter = NovelWritingAgentAdapter(repo_dir=repo_dir)  # model=None
-    assert adapter._write_config() is None
-    assert not (repo_dir / "config" / "config.yaml").exists()
+    assert adapter._write_config(workdir) is None
+    assert not (workdir / "config" / "config.yaml").exists()
 
 
 def test_restore_config_deletes_when_no_original(tmp_path):
     repo_dir = _repo_with_entry(tmp_path)
+    workdir = tmp_path / "workdir"
     adapter = NovelWritingAgentAdapter(repo_dir=repo_dir, model=_make_model())
-    assert adapter._write_config() is None  # 原无 config.yaml
-    assert (repo_dir / "config" / "config.yaml").exists()
+    assert adapter._write_config(workdir) is None  # 原无 config.yaml
+    assert (workdir / "config" / "config.yaml").exists()
 
-    adapter._restore_config(None)
-    assert not (repo_dir / "config" / "config.yaml").exists()
+    adapter._restore_config(None, workdir)
+    assert not (workdir / "config" / "config.yaml").exists()
 
 
 # ── _read_output ─────────────────────────────────────────

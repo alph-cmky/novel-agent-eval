@@ -21,6 +21,7 @@ from statistics import fmean, stdev
 from typing import Any
 
 from novel_agent_eval.agents.novel_agent import NovelAgentAdapter
+from novel_agent_eval.constory import consistency_score
 from novel_agent_eval.judge import Judge, JudgeScore
 from novel_agent_eval.metrics import efficiency_score, weighted_score
 
@@ -160,9 +161,12 @@ class BenchmarkRunner:
     judge 为必须注入的 Judge（或 mock）；repeat 为方法缺省重复次数。
     """
 
-    def __init__(self, judge: Judge, repeat: int = 3):
+    def __init__(self, judge: Judge, repeat: int = 3, consistency_checker=None):
         self._judge = judge
         self._repeat = repeat
+        # 可选注入 ConStory 一致性检测器：有则用 consistency_score(report.total)
+        # 覆盖 Judge 的 consistency 维（Judge 原始分存入 meta 供对比）。
+        self._consistency_checker = consistency_checker
 
     # -- run_case：单 case × repeat 次 → 聚合均值±标准差 --
 
@@ -178,7 +182,11 @@ class BenchmarkRunner:
         return self._aggregate(agent, case, runs)
 
     async def _run_once(self, agent, case, run_index: int) -> CaseRun:
-        """单次生成 → Judge 8 质量维 + efficiency 第 9 维 → weighted_score 合成 overall。"""
+        """单次生成 → Judge 8 质量维 + efficiency 第 9 维 → weighted_score 合成 overall。
+
+        若注入了 consistency_checker（ConStory），用 consistency_score(report.total)
+        覆盖 Judge 的 consistency 维；Judge 原始分 + ConStory 错误数一并存入 meta 供对比。
+        """
         gen = await agent.generate(case)
         js: JudgeScore = await self._judge.score(gen.content, case)
         eff = efficiency_score(
@@ -187,12 +195,25 @@ class BenchmarkRunner:
             gen.meta.get("evolution_rounds", 0),
         )
         dims = {**js.dimensions, EFFICIENCY_DIM: eff}
+        meta = dict(gen.meta)
+        if self._consistency_checker is not None:
+            report = await self._consistency_checker.check_consistency(gen.content)
+            con_score = consistency_score(report.total)
+            meta["consistency_judge"] = js.dimensions["consistency"]
+            meta["consistency_constory"] = con_score
+            meta["consistency_errors"] = report.total
+            meta["consistency_breakdown"] = {
+                "character": len(report.character),
+                "timeline": len(report.timeline),
+                "worldbuilding": len(report.worldbuilding),
+            }
+            dims["consistency"] = con_score
         overall = weighted_score(dims, case.stage)
         return CaseRun(
             run_index=run_index,
             dimensions=dims,
             overall=overall,
-            meta=gen.meta,
+            meta=meta,
         )
 
     @staticmethod

@@ -12,16 +12,15 @@ narrative_style 3 个子类型只保留在 raw，不进 3 类聚合。
 
 import asyncio
 import json
-import logging
 import os
+import re
 from pathlib import Path
 
-import aiohttp
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from novel_agent_eval.vendor.constory.judge import (
     EVALUATION_CRITERIA,
-    JudgeLLMClient,
     load_prompt_templates,
     parse_criteria_response,
 )
@@ -88,57 +87,90 @@ def _to_error(subtype: str, e: dict) -> ConsistencyError:
     )
 
 
+def _split_chatml(template: str) -> tuple[str, str]:
+    """把 ConStory prompt 模板（ChatML 格式）拆成 (system, user) 两条消息。
+
+    官方 JudgeLLMClient 把整个 ChatML 文本塞进单条 user message；StepFun 走 OpenAI
+    兼容协议，更规范的做法是拆成 system/user 两条 role，避免模型把 `<|im_start|>`
+    当普通文本。
+    """
+    m = re.search(r"<\|im_start\|>system\n(.*?)<\|im_end\|>", template, re.DOTALL)
+    system = m.group(1).strip() if m else ""
+    m = re.search(r"<\|im_start\|>user\n(.*?)<\|im_end\|>", template, re.DOTALL)
+    user = m.group(1).strip() if m else template
+    return system, user
+
+
+def consistency_score(total_errors: int, penalty_per_error: int = 20) -> int:
+    """把 ConStory 检出的矛盾总数折算为 0-100 连贯性分（每矛盾扣 penalty 分，下限 0）。"""
+    return max(0, 100 - penalty_per_error * total_errors)
+
+
 class ConStoryCheckerAdapter:
-    """ConStory-Checker 适配器：对 narrative 做连贯性检测，输出 3 类聚合报告。"""
+    """ConStory-Checker 适配器：对 narrative 做连贯性检测，输出 3 类聚合报告。
+
+    client 为 OpenAI 兼容 async client（StepFun），可注入 mock 供测试（与 judge.py
+    的构造模式一致）。对 step-3.7-flash（reasoning 模型）注入 reasoning_effort=low +
+    temperature=0，并把 ChatML 模板拆成 system/user 两条消息——官方 JudgeLLMClient
+    的默认档（无 reasoning_effort、temperature=0.5、ChatML 塞单条 user）会让
+    reasoning 模型 overthinking 编造矛盾，正好违背 ConStory「不编造」的初衷。
+    """
 
     def __init__(
         self,
-        api_base: str | None = None,
-        api_key: str | None = None,
+        client=None,
         model: str | None = None,
-        max_concurrent: int = 5,
+        prompts_dir: str | None = None,
     ):
-        self._api_base = api_base or os.environ["STEPFUN_BASE_URL"]
-        self._api_key = api_key or os.environ["STEPFUN_API_KEY"]
+        self._client = client or AsyncOpenAI(
+            api_key=os.environ.get("STEPFUN_API_KEY"),
+            base_url=os.environ.get("STEPFUN_BASE_URL"),
+        )
         self._model = model or os.environ.get("STEPFUN_JUDGE_MODEL", _DEFAULT_JUDGE_MODEL)
-        self._max_concurrent = max_concurrent
-        self._templates = load_prompt_templates(str(_VENDOR_PROMPTS_DIR))
-        self._logger = logging.getLogger(__name__)
+        self._templates = load_prompt_templates(str(prompts_dir or _VENDOR_PROMPTS_DIR))
+
+    async def _evaluate_category(self, template: str, narrative: str, cat: str) -> str:
+        """对单个类别发起一次评估，返回原始 content（失败时 raise，由上层降级）。"""
+        prompt = template.replace("{{ Content }}", narrative).replace(
+            "{{ Query }}", f"{EVALUATION_CRITERIA[cat]['name']} Analysis"
+        )
+        system, user = _split_chatml(prompt)
+        resp = await self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.0,
+            max_tokens=8192,
+            reasoning_effort="low",
+        )
+        return resp.choices[0].message.content or ""
 
     async def check_consistency(self, narrative: str) -> ConsistencyReport:
-        client = JudgeLLMClient(
-            api_base=self._api_base,
-            api_key=self._api_key,
-            model=self._model,
-            max_concurrent=self._max_concurrent,
-            logger=self._logger,
-        )
         raw: dict[str, list[dict]] = {full: [] for full in _ALL_SUBTYPES}
 
-        async with aiohttp.ClientSession() as session:
-            tasks = {
-                cat: client.evaluate_criteria(
-                    session, self._templates[cat], narrative, cat
-                )
-                for cat in EVALUATION_CRITERIA
-            }
-            gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
-            for cat, resp in zip(tasks, gathered):
-                cfg = EVALUATION_CRITERIA[cat]
-                if isinstance(resp, Exception) or not resp.get("success"):
-                    # 该类评估失败 → 子类型记空列表（降级，不抛异常）
-                    continue
-                content = resp.get("content", "")
-                parsed = parse_criteria_response(content, cfg["sub_criteria"], cat)
-                for sc in cfg["sub_criteria"]:
-                    full = f"{cat}_{sc}"
-                    try:
-                        items = json.loads(parsed.get(sc, "[]") or "[]")
-                    except json.JSONDecodeError:
-                        items = []
-                    if not isinstance(items, list):
-                        items = []
-                    raw[full] = [it for it in items if isinstance(it, dict)]
+        tasks = {
+            cat: self._evaluate_category(self._templates[cat], narrative, cat)
+            for cat in EVALUATION_CRITERIA
+        }
+        gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for cat, resp in zip(tasks, gathered):
+            cfg = EVALUATION_CRITERIA[cat]
+            if isinstance(resp, Exception):
+                # 该类评估失败 → 子类型记空列表（降级，不抛异常）
+                continue
+            content = resp or ""
+            parsed = parse_criteria_response(content, cfg["sub_criteria"], cat)
+            for sc in cfg["sub_criteria"]:
+                full = f"{cat}_{sc}"
+                try:
+                    items = json.loads(parsed.get(sc, "[]") or "[]")
+                except json.JSONDecodeError:
+                    items = []
+                if not isinstance(items, list):
+                    items = []
+                raw[full] = [it for it in items if isinstance(it, dict)]
 
         buckets: dict[str, list[ConsistencyError]] = {
             "character": [], "timeline": [], "worldbuilding": []

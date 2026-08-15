@@ -1,11 +1,19 @@
 # tests/test_constory.py
-"""ConStory-Checker 适配器 mock 测试：不消耗真实 StepFun API、不联网。"""
+"""ConStory-Checker 适配器 mock 测试：不消耗真实 StepFun API、不联网。
+
+注入 mock AsyncOpenAI client（chat.completions.create 按 user message 里的 Query
+识别类别并返回固定 content），覆盖 3 类聚合 / 全空 / 失败降级，以及
+_split_chatml / consistency_score 两个纯函数。
+"""
 import asyncio
 import json
 
-import pytest
-
-from novel_agent_eval.constory import ConsistencyReport, ConStoryCheckerAdapter
+from novel_agent_eval.constory import (
+    ConsistencyReport,
+    ConStoryCheckerAdapter,
+    _split_chatml,
+    consistency_score,
+)
 from novel_agent_eval.vendor.constory.judge import EVALUATION_CRITERIA
 
 # 固定错误：character / timeline / narrative_style 各 1 条，其余子类型空
@@ -43,43 +51,54 @@ def _make_content(criteria_name: str, errors: dict) -> str:
     return json.dumps(content, ensure_ascii=False)
 
 
-async def _fake_evaluate_criteria(
-    self, session, prompt_template, story_content, criteria_name
-):
-    return {"success": True, "content": _make_content(criteria_name, _FIXED_ERRORS)}
+class _FakeCompletions:
+    """mock client.chat.completions.create：按 user message 里的 Query 识别类别。
+
+    识别到类别后返回该类的固定 content；fail_categories 里的类别抛异常（模拟 API 失败）。
+    """
+
+    def __init__(self, responses: dict[str, str], fail_categories=()):
+        self._responses = responses
+        self._fail = set(fail_categories)
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        self.calls += 1
+        user = kwargs["messages"][1]["content"]
+        content = "{}"
+        for cat, cfg in EVALUATION_CRITERIA.items():
+            if f"{cfg['name']} Analysis" in user:
+                if cat in self._fail:
+                    raise RuntimeError("HTTP 429")
+                content = self._responses[cat]
+                break
+        message = type("Msg", (), {"content": content})()
+        choice = type("Choice", (), {"message": message})()
+        return type("Resp", (), {"choices": [choice]})()
 
 
-async def _fake_empty_evaluate_criteria(
-    self, session, prompt_template, story_content, criteria_name
-):
-    return {"success": True, "content": _make_content(criteria_name, {})}
+class _FakeClient:
+    def __init__(self, responses: dict[str, str], fail_categories=()):
+        self.chat = type(
+            "Chat", (), {"completions": _FakeCompletions(responses, fail_categories)}
+        )()
 
 
-async def _fake_failing_evaluate_criteria(
-    self, session, prompt_template, story_content, criteria_name
-):
-    # characterization 类失败 → 该类子类型记空，其余正常
-    if criteria_name == "characterization":
-        return {"success": False, "error": "HTTP 429"}
-    return {"success": True, "content": _make_content(criteria_name, _FIXED_ERRORS)}
+def _responses(errors: dict) -> dict[str, str]:
+    return {cat: _make_content(cat, errors) for cat in EVALUATION_CRITERIA}
 
 
-@pytest.fixture
-def env(monkeypatch):
-    monkeypatch.setenv("STEPFUN_BASE_URL", "https://api.example.test")
-    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+def _run(
+    errors: dict,
+    fail_categories=(),
+    narrative: str = "测试正文……",
+) -> ConsistencyReport:
+    client = _FakeClient(_responses(errors), fail_categories)
+    return asyncio.run(ConStoryCheckerAdapter(client=client).check_consistency(narrative))
 
 
-def _run(monkeypatch, fake, narrative="测试正文……") -> ConsistencyReport:
-    monkeypatch.setattr(
-        "novel_agent_eval.vendor.constory.judge.JudgeLLMClient.evaluate_criteria",
-        fake,
-    )
-    return asyncio.run(ConStoryCheckerAdapter().check_consistency(narrative))
-
-
-def test_check_consistency_aggregates_3_classes(monkeypatch, env):
-    report = _run(monkeypatch, _fake_evaluate_criteria)
+def test_check_consistency_aggregates_3_classes():
+    report = _run(_FIXED_ERRORS)
 
     assert len(report.character) == 1
     assert report.character[0].subtype == "characterization_memory_contradictions"
@@ -98,8 +117,8 @@ def test_check_consistency_aggregates_3_classes(monkeypatch, env):
     assert report.raw["characterization_knowledge_contradictions"] == []
 
 
-def test_check_consistency_all_empty_total_zero(monkeypatch, env):
-    report = _run(monkeypatch, _fake_empty_evaluate_criteria)
+def test_check_consistency_all_empty_total_zero():
+    report = _run({})
 
     assert report.total == 0
     assert report.character == []
@@ -108,18 +127,37 @@ def test_check_consistency_all_empty_total_zero(monkeypatch, env):
     assert all(items == [] for items in report.raw.values())
 
 
-def test_check_consistency_empty_narrative_total_zero(monkeypatch, env):
-    report = _run(monkeypatch, _fake_empty_evaluate_criteria, narrative="")
+def test_check_consistency_empty_narrative_total_zero():
+    report = _run({}, narrative="")
 
     assert report.total == 0
 
 
-def test_check_consistency_failed_category_degrades(monkeypatch, env):
+def test_check_consistency_failed_category_degrades():
     # characterization 类失败 → 该 4 子类型空，不抛异常，其余类正常聚合
-    report = _run(monkeypatch, _fake_failing_evaluate_criteria)
+    report = _run(_FIXED_ERRORS, fail_categories=("characterization",))
 
     assert report.character == []
     assert report.raw["characterization_memory_contradictions"] == []
     assert len(report.timeline) == 1
     assert report.timeline[0].subtype == "timeline_plot_absolute_time_contradictions"
     assert report.total == 1
+
+
+def test_split_chatml_extracts_system_and_user():
+    template = (
+        "<|im_start|>system\n你是检查器。\n<|im_end|>\n\n"
+        "<|im_start|>user\n正文：{{ Content }}\n<|im_end|>"
+    )
+    system, user = _split_chatml(template)
+    assert system == "你是检查器。"
+    assert "正文：" in user
+    assert "<|im_start|>" not in system
+    assert "<|im_start|>" not in user
+
+
+def test_consistency_score_penalty():
+    assert consistency_score(0) == 100
+    assert consistency_score(2) == 60
+    assert consistency_score(5) == 0
+    assert consistency_score(6) == 0  # 下限 0，不出现负分

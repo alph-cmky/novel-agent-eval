@@ -11,6 +11,7 @@ import statistics
 
 import pytest
 from novel_agent_eval.agents.base import GeneratedChapter
+from novel_agent_eval.constory import ConsistencyError, ConsistencyReport
 from novel_agent_eval.dataset.schema import EvalCase
 from novel_agent_eval.judge import QUALITY_DIMS, JudgeScore
 from novel_agent_eval.metrics import STAGE_WEIGHTS
@@ -133,6 +134,66 @@ def test_efficiency_dimension_merged_and_weighted():
     expected = round(sum(80 * w[d] for d in QUALITY_DIMS) + 30 * w["efficiency"], 2)
     assert run.overall == expected
     assert result.overall_mean == expected
+
+
+# ── consistency_checker：ConStory 覆盖 consistency 维 ────
+
+
+class FakeConsistencyChecker:
+    """返回固定 ConsistencyReport（character/timeline/worldbuilding 各若干错误）。"""
+
+    def __init__(self, character=1, timeline=1, worldbuilding=0):
+        self._report = ConsistencyReport(
+            character=[ConsistencyError(subtype="characterization_memory_contradictions", exact_quote="x")] * character,
+            timeline=[ConsistencyError(subtype="timeline_plot_absolute_time_contradictions", exact_quote="y")] * timeline,
+            worldbuilding=[ConsistencyError(subtype="world_building_core_rules_violations", exact_quote="z")] * worldbuilding,
+            raw={},
+            total=character + timeline + worldbuilding,
+        )
+        self.calls = 0
+
+    async def check_consistency(self, narrative: str) -> ConsistencyReport:
+        self.calls += 1
+        return self._report
+
+
+def test_consistency_checker_overrides_consistency_dim():
+    """注入 checker 后：consistency 维 = consistency_score(total)，Judge 原始分与 ConStory 详情进 meta。"""
+    agent = FakeAgent("a", meta=_meta())  # elapsed=30 → efficiency=100
+    judge = FakeJudge(_fixed_score(consistency=85))  # Judge 打 85
+    checker = FakeConsistencyChecker(character=1, timeline=1)  # 2 矛盾 → 60
+
+    result = _run(BenchmarkRunner(judge, consistency_checker=checker).run_case(agent, _case(), repeat=1))
+    run = result.runs[0]
+
+    assert checker.calls == 1
+    assert run.dimensions["consistency"] == 60          # consistency_score(2)=60
+    assert run.meta["consistency_judge"] == 85          # Judge 原始分保留
+    assert run.meta["consistency_constory"] == 60
+    assert run.meta["consistency_errors"] == 2
+    assert run.meta["consistency_breakdown"] == {"character": 1, "timeline": 1, "worldbuilding": 0}
+
+    # overall 按覆盖后的 consistency 加权，其余质量维仍 80，efficiency=100
+    w = STAGE_WEIGHTS["opening"]
+    expected = round(
+        sum(80 * w[d] for d in QUALITY_DIMS if d != "consistency")
+        + 60 * w["consistency"]
+        + 100 * w["efficiency"],
+        2,
+    )
+    assert run.overall == expected
+
+
+def test_no_consistency_checker_leaves_consistency_and_meta_untouched():
+    """不注入 checker：consistency 维保持 Judge 原值，meta 不含 consistency_* 键。"""
+    agent = FakeAgent("a", meta=_meta())
+    judge = FakeJudge(_fixed_score(consistency=85))
+
+    run = _run(BenchmarkRunner(judge).run_case(agent, _case(), repeat=1)).runs[0]
+
+    assert run.dimensions["consistency"] == 85
+    assert "consistency_judge" not in run.meta
+    assert "consistency_constory" not in run.meta
 
 
 # ── run_suite：agent × case 全遍历 ──────────────────────

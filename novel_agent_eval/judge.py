@@ -8,6 +8,7 @@
 输出 = JudgeScore（dimensions 8 维各 0-100 + overall）。
 """
 
+import asyncio
 import json
 import os
 import re
@@ -190,13 +191,22 @@ class Judge:
     STEPFUN_JUDGE_MODEL（默认 DEFAULT_JUDGE_MODEL）。
     """
 
-    def __init__(self, client=None, model: str | None = None, max_attempts: int = 3):
+    def __init__(
+        self,
+        client=None,
+        model: str | None = None,
+        max_attempts: int = 3,
+        n_samples: int = 1,
+    ):
         self._client = client or AsyncOpenAI(
             api_key=os.environ.get("STEPFUN_API_KEY"),
             base_url=os.environ.get("STEPFUN_BASE_URL"),
         )
         self._model = model or os.environ.get("STEPFUN_JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
         self._max_attempts = max_attempts  # 初次 + 最多 2 次重试
+        if n_samples < 1:
+            raise ValueError(f"n_samples 必须 >= 1，收到 {n_samples}")
+        self._n_samples = n_samples  # 中位数采样次数（>1 时取各维中位数，抑制偶发极端分）
 
     async def _request(self, prompt: str) -> str:
         # step-3.7-flash 是 reasoning 模型，这里的三项设置都是实测校准：
@@ -225,7 +235,21 @@ class Judge:
         return JudgeScore(dimensions=normalized, overall=overall)
 
     async def score(self, draft: str, case: EvalCase) -> JudgeScore:
-        """对生成章节 draft 打分，输入来自 case。解析失败或维度缺失时重试，最多 2 次。"""
+        """对生成章节 draft 打分，输入来自 case。
+
+        n_samples>1 时并发连打 n_samples 次取各维中位数，抑制 reasoning 模型偶发
+        极端分（探针确认 consistency 维 range=55，其余 7 维稳定）；单次采样内部仍
+        保留「解析失败/维度缺失」的重试兜底。
+        """
+        if self._n_samples <= 1:
+            return await self._score_once(draft, case)
+        samples = await asyncio.gather(
+            *(self._score_once(draft, case) for _ in range(self._n_samples))
+        )
+        return self._median_scores(samples)
+
+    async def _score_once(self, draft: str, case: EvalCase) -> JudgeScore:
+        """单次打分：解析失败或维度缺失时重试，最多 max_attempts 次。"""
         prompt = _build_judge_prompt(draft, case)
         data = None
         for _ in range(self._max_attempts):
@@ -235,3 +259,15 @@ class Judge:
                 return self._to_score(data)
         # 重试耗尽：缺失维度 0 分兜底（data 为 None 时整体 0 分）
         return self._to_score(data)
+
+    @staticmethod
+    def _median_scores(samples: list[JudgeScore]) -> JudgeScore:
+        """对多次采样取各维中位数（奇数取中位，偶数取上中位，整数分无需取平均）。"""
+        n = len(samples)
+
+        def _med(vals: list[int]) -> int:
+            return sorted(vals)[n // 2]
+
+        dims = {d: _med([s.dimensions[d] for s in samples]) for d in QUALITY_DIMS}
+        overall = _med([s.overall for s in samples])
+        return JudgeScore(dimensions=dims, overall=overall)

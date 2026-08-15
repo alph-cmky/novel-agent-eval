@@ -3,8 +3,10 @@
 import asyncio
 import json
 
+import pytest
+
 from novel_agent_eval.dataset.schema import EvalCase
-from novel_agent_eval.judge import Judge, JudgeScore, QUALITY_DIMS
+from novel_agent_eval.judge import QUALITY_DIMS, Judge, JudgeScore
 
 
 def _fixed() -> dict:
@@ -126,3 +128,36 @@ def test_score_accepts_flat_without_overall():
     score = _run(client)
     assert client.chat.completions.calls == 1
     assert score.overall == 80
+
+
+# ── 中位数采样（n_samples>1）─────────────────────────────
+
+
+def _score(consistency: int, overall: int) -> JudgeScore:
+    """构造一个除 consistency / overall 外其余维固定 70 的 JudgeScore。"""
+    dims = {d: 70 for d in QUALITY_DIMS}
+    dims["consistency"] = consistency
+    return JudgeScore(dimensions=dims, overall=overall)
+
+
+def test_median_scores_picks_median():
+    # 3 次采样 consistency 30/90/60 → 中位 60；overall 50/95/70 → 中位 70；其余维不变
+    samples = [_score(30, 50), _score(90, 95), _score(60, 70)]
+    merged = Judge._median_scores(samples)
+    assert merged.dimensions["consistency"] == 60
+    assert merged.dimensions["writing"] == 70
+    assert merged.overall == 70
+
+
+def test_score_samples_n_times_when_n_samples_set():
+    # n_samples=3 → 对同一 draft 连打 3 次（固定 content 时中位数=单次分）
+    client = _FakeClient(json.dumps(_fixed(), ensure_ascii=False))
+    score = asyncio.run(Judge(client, n_samples=3).score("draft", _make_case()))
+    assert client.chat.completions.calls == 3
+    assert score.dimensions["consistency"] == 85
+    assert score.overall == 77
+
+
+def test_n_samples_must_be_positive():
+    with pytest.raises(ValueError):
+        Judge(_FakeClient("{}"), n_samples=0)

@@ -56,6 +56,15 @@ class NovelWritingAgentAdapter(AgentAdapter):
             f"api_base: {self._model.base_url}\n"
             f"model: {self._model.model}\n"
             f"provider: openai\n"
+            f"max_steps: 50\n"
+            f"workspace_dir: ./workspace\n"
+            f"system_prompt_path: system_prompt.md\n"
+            f"tools:\n"
+            f"  enable_file_tools: true\n"
+            f"  enable_bash: false\n"
+            f"  enable_note: true\n"
+            f"  enable_skills: false\n"
+            f"  enable_mcp: false\n"
         )
 
     @staticmethod
@@ -88,6 +97,10 @@ class NovelWritingAgentAdapter(AgentAdapter):
         original = cfg.read_text(encoding="utf-8") if cfg.exists() else None
         cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text(self._render_config(), encoding="utf-8")
+        # 拷贝 system_prompt.md 模板文件
+        sys_prompt_src = self._repo_dir / "config" / "system_prompt.md"
+        if sys_prompt_src.exists():
+            shutil.copyfile(sys_prompt_src, cfg.parent / "system_prompt.md")
         return original
 
     def _restore_config(self, original: str | None, workdir: Path) -> None:

@@ -38,7 +38,11 @@ os.environ["BASELINE_API_KEY"] = os.environ["STEPFUN_API_KEY"]
 os.environ["BASELINE_BASE_URL"] = BASE_URL
 os.environ["BASELINE_MODEL"] = "step-3.7-flash"
 
+import argparse
+from novel_agent_eval.agents.base import ModelConfig
+from novel_agent_eval.agents.inkos import InkOSAdapter
 from novel_agent_eval.agents.novel_agent import NovelAgentAdapter
+from novel_agent_eval.agents.novel_writing import NovelWritingAgentAdapter
 from novel_agent_eval.agents.vanilla_llm import VanillaLLMAdapter
 from novel_agent_eval.constory import ConStoryCheckerAdapter
 from novel_agent_eval.dataset.loader import load_cases
@@ -47,44 +51,95 @@ from novel_agent_eval.report import render_json, render_scorecard
 from novel_agent_eval.runner import BenchmarkReport, BenchmarkRunner
 
 
-async def main() -> None:
-    repeat = int(os.environ.get("REPEAT", "1"))
-    cases = load_cases("novel_agent_eval/dataset/self_built")
-    agents = [NovelAgentAdapter(evolution_enabled=True), VanillaLLMAdapter()]
-    judge = Judge(n_samples=3)  # 中位数采样：抑制 reasoning 模型 consistency 维偶发极端分
-    # ConStory 一致性检测器：evidence-grounded 找矛盾，覆盖 Judge 的 consistency 维
-    # （Judge 原始分 + ConStory 错误数一并存入 CaseRun.meta 供对比）
-    consistency_checker = ConStoryCheckerAdapter()
-    runner = BenchmarkRunner(judge=judge, repeat=repeat, consistency_checker=consistency_checker)
+def _build_agent_list(agent_names: list[str]) -> list:
+    agents = []
+    stepfun_model = ModelConfig(
+        base_url=BASE_URL,
+        api_key=os.environ.get("STEPFUN_API_KEY", ""),
+        model="step-3.7-flash",
+    )
+    for name in agent_names:
+        name = name.strip().lower()
+        if name in ("novel_agent", "novel-agent", "novel"):
+            agents.append(NovelAgentAdapter(evolution_enabled=True))
+        elif name in ("vanilla_llm", "vanilla"):
+            agents.append(VanillaLLMAdapter())
+        elif name in ("inkos",):
+            agents.append(InkOSAdapter(model=stepfun_model, timeout=1800.0))
+        elif name in ("nwa", "novel_writing_agent"):
+            nwa_repo = Path("/tmp/nwa/NovelWritingAgent-main")
+            nwa_venv = Path("/tmp/nwa/venv")
+            os.environ["PATH"] = f"{nwa_venv / 'bin'}:{os.environ.get('PATH', '')}"
+            agents.append(NovelWritingAgentAdapter(repo_dir=nwa_repo, model=stepfun_model, timeout=1800.0))
+        else:
+            print(f"警告：未知的 Agent 名称 '{name}'，已跳过")
+    return agents
 
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description="小说 Agent 横向对比评测工具")
+    parser.add_argument("--agents", default=os.environ.get("AGENTS", "novel_agent,vanilla_llm"),
+                        help="逗号分隔的被测 Agent 列表，如 novel_agent,vanilla_llm,inkos,nwa")
+    parser.add_argument("--repeat", type=int, default=int(os.environ.get("REPEAT", "1")),
+                        help="每个用例的独立采样重复次数（默认 1）")
+    parser.add_argument("--dataset", default="novel_agent_eval/dataset/self_built",
+                        help="测试集路径")
+    parser.add_argument("--out", default="/tmp/horizontal_eval.json",
+                        help="评测结果 JSON 输出路径")
+    parser.add_argument("--resume", action="store_true", default=False,
+                        help="启用断点续跑（跳过 /tmp/horizontal_eval.json 中已完成的用例）")
+    args = parser.parse_args()
+
+    agent_names = [a.strip() for a in args.agents.split(",") if a.strip()]
+    agents = _build_agent_list(agent_names)
+    if not agents:
+        print("错误：未指定任何有效的被测 Agent", file=sys.stderr)
+        sys.exit(1)
+
+    cases = load_cases(args.dataset)
+    judge = Judge(n_samples=3)
+    consistency_checker = ConStoryCheckerAdapter()
+    runner = BenchmarkRunner(judge=judge, repeat=args.repeat, consistency_checker=consistency_checker)
+
+    # 断点续跑缓存读取
     results = []
+    completed_keys = set()
+    out_path = Path(args.out)
+    if args.resume and out_path.exists():
+        try:
+            cached_data = json.loads(out_path.read_text(encoding="utf-8"))
+            for item in cached_data.get("results", []):
+                completed_keys.add((item.get("agent"), item.get("case")))
+            print(f"[断点续跑] 已加载 {len(completed_keys)} 个已完成的用例记录", flush=True)
+        except Exception:
+            pass
+
     failed = []
     for agent in agents:
         for case in cases:
-            try:
-                res = await runner.run_case(agent, case, repeat)
-            except Exception as e:  # noqa: BLE001 — 单 case 偶发崩溃不中断整体横评
-                failed.append(f"{agent.name}:{case.name}")
-                print(
-                    f"[{agent.name}] {case.name} FAILED: {type(e).__name__}: {e}",
-                    flush=True,
-                )
+            if (agent.name, case.name) in completed_keys:
+                print(f"[{agent.name}] {case.name} 已在缓存中，跳过", flush=True)
                 continue
+
+            try:
+                res = await runner.run_case(agent, case, args.repeat)
+            except Exception as e:
+                failed.append(f"{agent.name}:{case.name}")
+                print(f"[{agent.name}] {case.name} FAILED: {type(e).__name__}: {e}", flush=True)
+                continue
+
             results.append(res)
-            dims_brief = ", ".join(
-                f"{k}={v:.0f}" for k, v in res.dims_mean.items()
-            )
+            dims_brief = ", ".join(f"{k}={v:.0f}" for k, v in res.dims_mean.items())
             print(f"[{res.agent}] {res.case} overall={res.overall_mean:.1f} | {dims_brief}", flush=True)
 
     report = BenchmarkReport(
         results=results,
-        repeat=repeat,
+        repeat=args.repeat,
         agents=[a.name for a in agents],
         cases=[c.name for c in cases],
     )
-    out = Path("/tmp/horizontal_eval.json")
-    out.write_text(render_json(report), encoding="utf-8")
-    print(f"\n=== 结果已存 {out} ===\n", flush=True)
+    out_path.write_text(render_json(report), encoding="utf-8")
+    print(f"\n=== 结果已存 {out_path} ===\n", flush=True)
     print(render_scorecard(report), flush=True)
 
 

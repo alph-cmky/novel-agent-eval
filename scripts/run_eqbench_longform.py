@@ -68,14 +68,21 @@ def load_prompts(n: int) -> list[dict]:
 async def main() -> None:
     n_prompts = int(os.environ.get("N_PROMPTS", "2"))
     n_samples = int(os.environ.get("JUDGE_N_SAMPLES", "1"))
+    target_pid = os.environ.get("PROMPT_INDEX", None)  # 1-indexed: "1" 或 "2"
 
-    prompts = load_prompts(n_prompts)
+    all_prompts = load_prompts(n_prompts)
+    if target_pid:
+        idx = int(target_pid) - 1
+        prompts = [(idx + 1, all_prompts[idx])]
+    else:
+        prompts = list(enumerate(all_prompts, start=1))
+
     bridge = EQBenchBridge()
     judge = EQBenchJudge(n_samples=n_samples)
     agents = [NovelAgentAdapter(evolution_enabled=True), VanillaLLMAdapter()]
 
     results = []
-    for pid, prompt in enumerate(prompts, start=1):
+    for pid, prompt in prompts:
         writing_prompt = prompt["writing_prompt"]
         title = prompt["title"]
         # 同一 prompt 的 plan 只跑一次 bridge，两个 agent 共享（省一半 planning 调用）

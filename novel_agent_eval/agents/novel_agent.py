@@ -58,6 +58,20 @@ class NovelAgentAdapter:
             sections.append(f"## 本章大纲\n{case.target_chapter_outline}")
         return "\n\n".join(sections)
 
+    @staticmethod
+    def _truncate_previous_context(context: str, max_chars: int = 1500) -> str:
+        """多章连续连载时的智能前文滑动窗口截断。
+        
+        若前文超过 max_chars（如第 7/8 章累积数万字），只保留首段背景提示 + 最近一章末尾 1200 字，
+        防止超长前文挤爆 Prompt 导致注意力稀释与后程字数崩塌。
+        """
+        if not context or len(context) <= max_chars:
+            return context
+        # 保留前 300 字作为宏观背景，加上末尾 1200 字作为紧邻剧情钩子
+        head = context[:300].strip()
+        tail = context[-1200:].strip()
+        return f"{head}\n\n[...中间章节前文已由世界观记忆库接管...]\n\n{tail}"
+
     def _map_initial_state(self, case: EvalCase, persist_dir: str) -> dict:
         """EvalCase → 主仓库 initial_state（对齐 routes.py 的字段清单）。
 
@@ -76,7 +90,7 @@ class NovelAgentAdapter:
             "narrative_perspective": case.narrative_perspective or "",
             "character_context": "",
             "world_context": "",
-            "recent_summary": case.previous_context,
+            "recent_summary": self._truncate_previous_context(case.previous_context),
             "existing_world_entities": [],
             "persist_dir": persist_dir,
             "retry_count": 0,

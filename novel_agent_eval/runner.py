@@ -175,26 +175,24 @@ class BenchmarkRunner:
     # -- run_case：单 case × repeat 次 → 聚合均值±标准差 --
 
     async def run_case(self, agent, case, repeat: int | None = None) -> BenchmarkResult:
-        """跑单个 case repeat 次，受控并发执行并聚合各维与 overall 的均值±标准差。"""
+        """跑单个 case repeat 次，并聚合各维与 overall 的均值±标准差。"""
         n = self._repeat if repeat is None else repeat
-        if n <= 1:
-            runs = [await self._run_once(agent, case, 0)]
-        else:
-            tasks = [self._run_once_with_sem(agent, case, i) for i in range(n)]
-            runs = await asyncio.gather(*tasks)
+        runs = []
+        for i in range(n):
+            run = await self._run_once_with_retry(agent, case, i)
+            runs.append(run)
         return self._aggregate(agent, case, runs)
 
-    async def _run_once_with_sem(self, agent, case, run_index: int) -> CaseRun:
-        async with self._SEMAPHORE:
-            for attempt in range(5):
-                try:
-                    return await self._run_once(agent, case, run_index)
-                except Exception as e:
-                    if "429" in str(e) or "concurrency" in str(e).lower():
-                        await asyncio.sleep(2.0 * (attempt + 1))
-                        continue
-                    raise
-            return await self._run_once(agent, case, run_index)
+    async def _run_once_with_retry(self, agent, case, run_index: int) -> CaseRun:
+        for attempt in range(5):
+            try:
+                return await self._run_once(agent, case, run_index)
+            except Exception as e:
+                if "429" in str(e) or "concurrency" in str(e).lower() or "closed" in str(e).lower():
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                    continue
+                raise
+        return await self._run_once(agent, case, run_index)
 
     async def _run_once(self, agent, case, run_index: int) -> CaseRun:
         """单次生成 → Judge 8 质量维 + efficiency 第 9 维 → weighted_score 合成 overall。

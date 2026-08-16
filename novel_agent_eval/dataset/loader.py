@@ -11,22 +11,23 @@ def load_cases(dir_path: str) -> list[EvalCase]:
     return cases
 
 
-def load_external_constory_cases(json_path: str, max_cases: int = 10) -> list[EvalCase]:
-    """从 fetch.py 下载的 constory_prompts_longform.json 加载为 EvalCase 列表。"""
+def load_external_benchmark_cases(json_path: str, benchmark_type: str = "litbench") -> list[EvalCase]:
+    """从 external_benchmarks.json 加载指定开源评测集（litbench / longwriter / storybench）。"""
     p = Path(json_path)
     if not p.exists():
         return []
-    raw_list = json.loads(p.read_text(encoding="utf-8"))
+    data = json.loads(p.read_text(encoding="utf-8"))
+    items = data.get(benchmark_type.lower().strip(), [])
     cases = []
-    for item in raw_list[:max_cases]:
+    for item in items:
         case = EvalCase(
-            name=f"constory_{item.get('id', len(cases)+1)}",
-            stage="long",
-            genre="通用故事",
+            name=f"{benchmark_type}_{item.get('id', len(cases)+1)}",
+            stage="long" if benchmark_type in ("longwriter", "storybench") else "opening",
+            genre=item.get("genre", "通用故事"),
             story_outline=item.get("prompt", ""),
             previous_context="",
             target_chapter_outline=item.get("prompt", ""),
-            word_target=2000,
+            word_target=item.get("word_target", 3000),
         )
         cases.append(case)
     return cases

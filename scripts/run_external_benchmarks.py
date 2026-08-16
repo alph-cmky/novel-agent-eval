@@ -61,12 +61,32 @@ async def main() -> None:
         print(f"错误：未加载到任何用例，请检查 benchmark 参数: {args.benchmark}", file=sys.stderr)
         sys.exit(1)
 
+    from novel_agent_eval.agents.base import ModelConfig
+    from novel_agent_eval.agents.inkos import InkOSAdapter
+    from novel_agent_eval.agents.novel_writing import NovelWritingAgentAdapter
+    from novel_agent_eval.agents.story_diffusion import StoryDiffusionAdapter
+
+    stepfun_model = ModelConfig(
+        base_url=BASE_URL,
+        api_key=os.environ.get("STEPFUN_API_KEY", ""),
+        model="step-3.7-flash",
+    )
+
     agents = []
     for name in [a.strip().lower() for a in args.agents.split(",")]:
         if name in ("novel_agent", "novel"):
             agents.append(NovelAgentAdapter(evolution_enabled=True))
         elif name in ("vanilla_llm", "vanilla"):
             agents.append(VanillaLLMAdapter())
+        elif name in ("inkos",):
+            agents.append(InkOSAdapter(model=stepfun_model, timeout=1800.0))
+        elif name in ("nwa", "novel_writing_agent"):
+            nwa_repo = Path("/tmp/nwa/NovelWritingAgent-main")
+            nwa_venv = Path("/tmp/nwa/venv")
+            os.environ["PATH"] = f"{nwa_venv / 'bin'}:{os.environ.get('PATH', '')}"
+            agents.append(NovelWritingAgentAdapter(repo_dir=nwa_repo, model=stepfun_model, timeout=1800.0))
+        elif name in ("story_diffusion", "diffusion", "story"):
+            agents.append(StoryDiffusionAdapter(model=stepfun_model))
 
     judge = Judge(n_samples=3)
     runner = BenchmarkRunner(judge=judge, repeat=args.repeat)

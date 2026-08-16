@@ -16,6 +16,7 @@ repeat 次后聚合各维 / overall 的均值±标准差。
   - BenchmarkReport run_suite 完整结果（agent × case 矩阵 + repeat + 汇总）
   - ComparisonReport compare 结果（agent 间总分对比 + 各维对比，供跑分卡）
 """
+import asyncio
 from dataclasses import dataclass, field
 from statistics import fmean, stdev
 from typing import Any
@@ -171,14 +172,14 @@ class BenchmarkRunner:
     # -- run_case：单 case × repeat 次 → 聚合均值±标准差 --
 
     async def run_case(self, agent, case, repeat: int | None = None) -> BenchmarkResult:
-        """跑单个 case repeat 次，聚合各维与 overall 的均值±标准差。
-
-        注：方案 brief 草拟签名为 `-> list[BenchmarkResult]`，但任务注记 #4 定义
-        BenchmarkResult 即聚合结果（各维 mean/std + overall mean/std + runs），
-        单 case 单配置即一个聚合对象，故返回单对象而非单元素 list。
-        """
+        """跑单个 case repeat 次，并发执行并聚合各维与 overall 的均值±标准差。"""
         n = self._repeat if repeat is None else repeat
-        runs = [await self._run_once(agent, case, i) for i in range(n)]
+        if n <= 1:
+            runs = [await self._run_once(agent, case, 0)]
+        else:
+            # 多轮独立重复（如 REPEAT=4 / Avg@4）并发执行，提升 3~4 倍评测吞吐
+            tasks = [self._run_once(agent, case, i) for i in range(n)]
+            runs = await asyncio.gather(*tasks)
         return self._aggregate(agent, case, runs)
 
     async def _run_once(self, agent, case, run_index: int) -> CaseRun:

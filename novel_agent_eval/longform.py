@@ -69,14 +69,33 @@ async def run_longform(
     context = ""
     for i, case in enumerate(cases, start=1):
         case.previous_context = context
-        gen = await agent.generate(case)
-        scores = await judge.score_chapter(
-            writing_prompt=plan.writing_prompt,
-            final_plan=plan.final_plan,
-            character_profiles=plan.character_profiles,
-            chapter_number=i,
-            chapter_text=gen.content,
-        )
+        gen = None
+        for attempt in range(5):
+            try:
+                gen = await agent.generate(case)
+                break
+            except Exception as e:
+                if "429" in str(e) or "concurrency" in str(e).lower():
+                    await asyncio.sleep(3.0 * (attempt + 1))
+                    continue
+                raise
+
+        scores = None
+        for attempt in range(5):
+            try:
+                scores = await judge.score_chapter(
+                    writing_prompt=plan.writing_prompt,
+                    final_plan=plan.final_plan,
+                    character_profiles=plan.character_profiles,
+                    chapter_number=i,
+                    chapter_text=gen.content,
+                )
+                break
+            except Exception as e:
+                if "429" in str(e) or "concurrency" in str(e).lower():
+                    await asyncio.sleep(3.0 * (attempt + 1))
+                    continue
+                raise
         eq = eqbench_chapter_score(scores)
         chapters.append(
             ChapterResult(

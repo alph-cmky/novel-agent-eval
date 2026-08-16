@@ -10,6 +10,7 @@ degradation 为横评自建指标（官方无此定义）：尾段均值 - 首�
 连载衰减。window 控制首/尾各取几章。
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 

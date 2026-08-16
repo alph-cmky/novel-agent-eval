@@ -10,10 +10,10 @@ _SELF_BUILT_DIR = Path(__file__).resolve().parents[1] / "novel_agent_eval" / "da
 
 def test_load_all_self_built_cases():
     cases = load_cases(str(_SELF_BUILT_DIR))
-    assert len(cases) == 12
+    assert len(cases) == 13
     stages = [c.stage for c in cases]
     assert stages.count("opening") == 4
-    assert stages.count("middle") == 4
+    assert stages.count("middle") == 5
     assert stages.count("long") == 4
 
 
@@ -62,12 +62,13 @@ def test_self_built_cases_ground_truth_quality():
 
 
 def test_self_built_genres_diversity():
-    """验证评测集涵盖多样化题材（包含古言百合、仙侠耽美、赛博朋克、都市商战等）。"""
+    """验证评测集涵盖多样化题材（包含古言百合、仙侠耽美、赛博朋克、女主无CP修仙等）。"""
     cases = load_cases(str(_SELF_BUILT_DIR))
     genres = {c.genre for c in cases}
     assert "古言百合" in genres
     assert "仙侠耽美" in genres
     assert "赛博耽美" in genres
+    assert "女主无CP修仙" in genres
     assert "玄幻" in genres
     assert "都市" in genres
 

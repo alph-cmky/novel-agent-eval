@@ -63,7 +63,9 @@ async def main() -> None:
 
     from novel_agent_eval.agents.base import ModelConfig
     from novel_agent_eval.agents.inkos import InkOSAdapter
+    from novel_agent_eval.agents.novel_forge import NovelForgeAdapter
     from novel_agent_eval.agents.novel_writing import NovelWritingAgentAdapter
+    from novel_agent_eval.agents.story_bible import StoryBibleAdapter
     from novel_agent_eval.agents.story_diffusion import StoryDiffusionAdapter
 
     stepfun_model = ModelConfig(
@@ -80,6 +82,10 @@ async def main() -> None:
             agents.append(VanillaLLMAdapter())
         elif name in ("inkos",):
             agents.append(InkOSAdapter(model=stepfun_model, timeout=1800.0))
+        elif name in ("novel_forge", "novelforge", "forge"):
+            agents.append(NovelForgeAdapter(model=stepfun_model))
+        elif name in ("story_bible", "bible", "huxiuzhi", "workspace"):
+            agents.append(StoryBibleAdapter(model=stepfun_model))
         elif name in ("nwa", "novel_writing_agent"):
             nwa_repo = Path("/tmp/nwa/NovelWritingAgent-main")
             nwa_venv = Path("/tmp/nwa/venv")

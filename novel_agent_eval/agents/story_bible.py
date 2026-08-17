@@ -12,7 +12,7 @@ from novel_agent_eval.dataset.schema import EvalCase
 
 
 class StoryBibleAdapter(AgentAdapter):
-    """基于全局故事圣经 (Story Bible) 与角色工作台注入的 Huxiuzhi / Awesome-Novel 风格 Agent。"""
+    """策略模拟器（非官方实现）：模拟全局故事圣经与角色卡约束，不产生对应项目的真实成绩。"""
 
     name = "story_bible"
 

@@ -59,7 +59,7 @@ uv run python scripts/run_eqbench_longform.py
 - 自建集是 13 个带角色、时间线和世界观冲突的单章 hard cases，不等同于 50～100 章真实连续文本。
 - `ground_truth` 字段已定义，但当前没有用于计算伏笔回收率、大纲覆盖率或 bug precision/recall。
 - `NovelAgentAdapter` 为隔离评测使用空 `project_id`，不会读取真实项目数据库和完整向量记忆；结果不能直接代表生产项目的完整长程记忆能力。
-- `evolution_enabled` 消融接口目前只改变部分人工拒绝处理逻辑，不代表移除了整套递归进化图。
+- 主仓库已移除非进化路径，`evolution_enabled` 参数已弃用（保留仅为兼容旧调用）；评测侧不再声称能做进化开关消融。
 - Judge 尚未完成人工标注校准；相关系数和单轮结果不应被解释为统计显著性证明。
 - `tokens` 在部分 adapter 中不可用，效率分主要由耗时和进化轮次计算。
 
@@ -74,13 +74,15 @@ uv run python scripts/run_eqbench_longform.py
 ## 数据与第三方资源
 
 - `dataset/self_built/` 是本项目自建案例。
-- EQ-Bench 和 ConStory 的 prompt、规则及代码来自上游项目，发布前请遵守各自许可证和再分发要求。
+- EQ-Bench 和 ConStory 的 prompt、规则及代码来自上游项目，版权归属与许可证见
+  `THIRD_PARTY_NOTICES.md`。
 - 外部数据下载脚本只下载到本地，不应把未获授权的数据集提交到仓库。
 
 ## 结果报告
 
-仓库中的报告是实验记录，不是官方 benchmark 排名。报告中的结果应结合采样次数、Judge、
-数据集和 adapter 类型阅读；尤其不要把策略模拟器结果表述为真实社区 Agent 的成绩。
+本仓库不分发历史实验报告与原始分数归档；它们仅保存在作者本地作为实验记录。
+公开仓库只提供可复现的评测代码、自建数据集与第三方评测接入逻辑，不对任何 Agent
+做出排名结论。
 
 ## License
 

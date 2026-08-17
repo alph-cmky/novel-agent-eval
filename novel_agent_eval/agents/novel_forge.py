@@ -12,7 +12,7 @@ from novel_agent_eval.dataset.schema import EvalCase
 
 
 class NovelForgeAdapter(AgentAdapter):
-    """基于三层账本管理与对抗式审查修复 (Adversarial Review) 的 NovelForge 风格 Agent。"""
+    """策略模拟器（非官方实现）：模拟三层账本与对抗式审查修复，不产生 NovelForge 项目的真实成绩。"""
 
     name = "novel_forge"
 

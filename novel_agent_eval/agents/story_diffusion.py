@@ -12,7 +12,7 @@ from novel_agent_eval.dataset.schema import EvalCase
 
 
 class StoryDiffusionAdapter(AgentAdapter):
-    """基于经典两阶段 (Outline Planning -> Multi-Scene Expansion) 的开源故事生成 Agent。"""
+    """策略模拟器（非官方实现）：模拟两阶段分镜规划与场景扩写，不产生 StoryDiffusion 项目的真实成绩。"""
 
     name = "story_diffusion"
 

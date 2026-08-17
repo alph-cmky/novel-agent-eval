@@ -1,9 +1,6 @@
 # tests/test_metrics.py
-from novel_agent_eval.metrics import CORE_WEIGHTS, STAGE_WEIGHTS, weighted_score
+from novel_agent_eval.metrics import STAGE_WEIGHTS, weighted_score
 
-
-def test_core_weights_sum_to_one():
-    assert abs(sum(CORE_WEIGHTS.values()) - 1.0) < 1e-9
 
 def test_each_stage_weights_sum_to_one():
     for stage, w in STAGE_WEIGHTS.items():

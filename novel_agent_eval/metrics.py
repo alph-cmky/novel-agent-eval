@@ -1,10 +1,4 @@
 # novel_agent_eval/metrics.py
-CORE_WEIGHTS = {
-    "consistency": 0.25, "writing": 0.08, "ai_flavor": 0.07,
-    "dialogue": 0.10, "plot": 0.10, "instruction": 0.15,
-    "creativity": 0.10, "controllability": 0.10, "efficiency": 0.05,
-}
-
 STAGE_WEIGHTS = {
     "opening": {"consistency": 0.10, "writing": 0.18, "ai_flavor": 0.17,
                 "dialogue": 0.12, "plot": 0.12, "instruction": 0.15,

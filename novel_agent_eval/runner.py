@@ -27,7 +27,6 @@ from novel_agent_eval.judge import Judge, JudgeScore
 from novel_agent_eval.metrics import efficiency_score, weighted_score
 
 EFFICIENCY_DIM = "efficiency"
-STD_ZERO_WHEN_N1 = "repeat<2 时无样本方差，std 记 0.0"
 
 
 # ── 数据结构 ────────────────────────────────────────────

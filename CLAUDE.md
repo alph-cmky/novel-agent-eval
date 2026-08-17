@@ -50,21 +50,21 @@ EvalCase ──> AgentAdapter.generate ──> Judge.score(8 质量维) ──> 
 
 ### 数据
 - 评测集 `dataset/self_built/*.json`，`load_cases()` 读目录；`Stage` 三档 `opening`/`middle`/`long`。
-- `EvalCase.ground_truth`（`continuity_bugs`/`foreshadowings`/`outline_points`）**已填但当前无消费者** —— 对账留待「Judge 校准」改进，见 `docs/评测改进计划.md`。
+- `EvalCase.ground_truth`（`continuity_bugs`/`foreshadowings`/`outline_points`）**已填但当前无消费者** —— 对账留待「Judge 校准」改进。
 
 ### 打分
-- `weighted_score` 按 stage 加权（`metrics.STAGE_WEIGHTS`）；`CORE_WEIGHTS` 当前未用。
+- `weighted_score` 按 stage 加权（`metrics.STAGE_WEIGHTS`）。
 - **repeat 的 std 语义别混**：`BenchmarkResult.overall_std` = 同一 case 重跑方差（σ_gen + σ_judge）；`ComparisonReport.overall_std` = 跨 case 方差。判断「A vs B 差值是否有意义」用前者。
 - Judge `n_samples` 中位数采样：默认 1，横评脚本用 3（抑制 consistency 维偶发极端分）。
 - `Judge._to_score` 兜底：缺失维给 0，overall 缺失退化为 8 维平均。
 
 ### Judge 校准（规划中，未实现）
 - 校准 Judge 时用 **Cohen's kappa**，不用 raw agreement —— 两个 judge 都 ~97% 一致率也可能 kappa≈0（毫无区分力）。
-- 「差值有意义」= `d > MDD ≈ z·sqrt(σ_gen²/n + σ_judge²)`；三件套（repeat 均值 / 数据集提难度 / Judge 校准）的排期见 `docs/评测改进计划.md`。
+- 「差值有意义」= `d > MDD ≈ z·sqrt(σ_gen²/n + σ_judge²)`；三件套（repeat 均值 / 数据集提难度 / Judge 校准）尚未排期。
 
 ## 已知坑
 
 - **LLM 输出必须先过 `_strip_none`**：`dict.get(key, default)` 在键存在但值为 None 时返回 None，下游 `.get(...)` 直接崩溃。
 - **`step-3.7-flash` 是 reasoning 模型**：`max_tokens=8192` + `reasoning_effort="low"` 缺一不可，否则 content 被 reasoning 挤空。
 - **主仓库 `build_chapter_graph_async` 非空 `persist_dir`** 用 aiosqlite 非 daemon 线程，短生命周期进程必须 `aclose_checkpointers()` 收口，否则退出挂死。
-- `run_horizontal_eval.py` 默认 `REPEAT=1`（待改 3，见计划文档改进一）。
+- `run_horizontal_eval.py` 默认 `REPEAT=1`，统计结论需提高到 ≥3 次重复。

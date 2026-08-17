@@ -6,7 +6,11 @@ import pytest
 
 from novel_agent_eval.agents.base import GeneratedChapter
 from novel_agent_eval.eqbench_bridge import LongformPlan
-from novel_agent_eval.longform import degradation_score, render_longform_table, run_longform
+from novel_agent_eval.longform import (
+    degradation_score,
+    render_longform_table,
+    run_longform,
+)
 
 
 class _FakeAgent:

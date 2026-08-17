@@ -141,7 +141,7 @@ _ABLATION_REGISTRY: dict[str, dict[str, Any]] = {
         "factory": lambda: NovelAgentAdapter(evolution_enabled=True),
     },
     "evolution_enabled": {
-        "desc": "关闭进化：Writer→Editor→Continuity 线性闭环（legacy 路径）",
+        "desc": "有限消融：切换人工拒绝后的处理路径（不会移除递归进化图）",
         "factory": lambda: NovelAgentAdapter(evolution_enabled=False),
     },
 }

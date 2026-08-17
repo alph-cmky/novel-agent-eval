@@ -10,8 +10,8 @@ import time
 
 from openai import AsyncOpenAI
 
+from novel_agent_eval.agents.base import GeneratedChapter
 from novel_agent_eval.dataset.schema import EvalCase
-from novel_agent_eval.agents.base import AgentAdapter, GeneratedChapter
 
 DEFAULT_BASELINE_MODEL = "step-3.7-flash"
 

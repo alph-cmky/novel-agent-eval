@@ -5,7 +5,6 @@
   STEPFUN_API_KEY=... DEEPSEEK_API_KEY=... uv run python scripts/run_parallel_all.py
 """
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
@@ -49,7 +48,7 @@ async def _run_worker(agent, cases: list, repeat: int, worker_name: str) -> list
             results.append(res)
             dims_brief = ", ".join(f"{k}={v:.0f}" for k, v in res.dims_mean.items())
             print(f"[{worker_name}] [{res.agent}] {res.case} overall={res.overall_mean:.1f} | {dims_brief}", flush=True)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - one failed case must not abort the suite
             print(f"[{worker_name}] [{agent.name}] {c.name} FAILED: {e}", flush=True)
     return results
 

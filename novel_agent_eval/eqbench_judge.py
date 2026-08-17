@@ -204,13 +204,13 @@ class EQBenchJudge:
         chapter_text: str,
     ) -> dict[str, float]:
         """逐章 14 维原始分（0-20）。n_samples>1 时并发采样取各维中位数。"""
-        kwargs = dict(
-            writing_prompt=writing_prompt,
-            final_plan=final_plan,
-            character_profiles=character_profiles,
-            chapter_number=chapter_number,
-            chapter_text=chapter_text,
-        )
+        kwargs = {
+            "writing_prompt": writing_prompt,
+            "final_plan": final_plan,
+            "character_profiles": character_profiles,
+            "chapter_number": chapter_number,
+            "chapter_text": chapter_text,
+        }
         if self._n_samples <= 1:
             return await self._score_once(**kwargs)
         samples = await asyncio.gather(*(self._score_once(**kwargs) for _ in range(self._n_samples)))

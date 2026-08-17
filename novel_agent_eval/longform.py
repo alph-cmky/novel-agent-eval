@@ -14,7 +14,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
-from novel_agent_eval.eqbench_bridge import EQBenchBridge, LongformPlan, plan_to_cases
+from novel_agent_eval.eqbench_bridge import LongformPlan, plan_to_cases
 from novel_agent_eval.eqbench_judge import EQBenchJudge, eqbench_chapter_score
 
 

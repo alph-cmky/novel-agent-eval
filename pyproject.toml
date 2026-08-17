@@ -1,8 +1,9 @@
 [project]
 name = "novel-agent-eval"
 version = "0.1.0"
-description = "Add your description here"
+description = "Evaluation harness for long-form Agent writing systems"
 readme = "README.md"
+license = { text = "MIT" }
 authors = [
     { name = "eleven_qy", email = "64311644+alph-cmky@users.noreply.github.com" }
 ]

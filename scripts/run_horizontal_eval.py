@@ -10,6 +10,7 @@
 三者统一指向 StepFun 的 step-3.7-flash，且都注入 reasoning_effort=low。
 """
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -39,6 +40,7 @@ os.environ["BASELINE_BASE_URL"] = BASE_URL
 os.environ["BASELINE_MODEL"] = "step-3.7-flash"
 
 import argparse
+
 from novel_agent_eval.agents.base import ModelConfig
 from novel_agent_eval.agents.inkos import InkOSAdapter
 from novel_agent_eval.agents.novel_agent import NovelAgentAdapter
@@ -67,8 +69,9 @@ def _build_agent_list(agent_names: list[str]) -> list:
         elif name in ("inkos",):
             agents.append(InkOSAdapter(model=stepfun_model, timeout=1800.0))
         elif name in ("nwa", "novel_writing_agent"):
-            nwa_repo = Path("/tmp/nwa/NovelWritingAgent-main")
-            nwa_venv = Path("/tmp/nwa/venv")
+            nwa_root = Path(os.environ.get("NWA_ROOT", "/tmp/nwa"))
+            nwa_repo = Path(os.environ.get("NWA_REPO_DIR", nwa_root / "NovelWritingAgent-main"))
+            nwa_venv = Path(os.environ.get("NWA_VENV_DIR", nwa_root / "venv"))
             os.environ["PATH"] = f"{nwa_venv / 'bin'}:{os.environ.get('PATH', '')}"
             agents.append(NovelWritingAgentAdapter(repo_dir=nwa_repo, model=stepfun_model, timeout=1800.0))
         else:
@@ -111,7 +114,7 @@ async def main() -> None:
             for item in cached_data.get("results", []):
                 completed_keys.add((item.get("agent"), item.get("case")))
             print(f"[断点续跑] 已加载 {len(completed_keys)} 个已完成的用例记录", flush=True)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
 
     failed = []
@@ -123,7 +126,7 @@ async def main() -> None:
 
             try:
                 res = await runner.run_case(agent, case, args.repeat)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one failed case must not abort the suite
                 failed.append(f"{agent.name}:{case.name}")
                 print(f"[{agent.name}] {case.name} FAILED: {type(e).__name__}: {e}", flush=True)
                 continue

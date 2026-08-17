@@ -4,6 +4,7 @@
 """
 import os
 import time
+
 from openai import AsyncOpenAI
 
 from novel_agent_eval.agents.base import AgentAdapter, GeneratedChapter, ModelConfig

@@ -1,5 +1,6 @@
 # novel_agent_eval/dataset/schema.py
 from typing import Literal
+
 from pydantic import BaseModel, Field
 
 Stage = Literal["opening", "middle", "long"]   # 开局(1-10章) / 中段(30-50) / 长程(80-100)

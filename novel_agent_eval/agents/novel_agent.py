@@ -17,11 +17,10 @@ import time
 import zlib
 
 from langgraph.types import Command
-
 from novel_agent.graph.chapter import aclose_checkpointers, build_chapter_graph_async
 
+from novel_agent_eval.agents.base import GeneratedChapter
 from novel_agent_eval.dataset.schema import EvalCase
-from novel_agent_eval.agents.base import AgentAdapter, GeneratedChapter
 
 # case.stage → 主仓库 story_length 取值（Orchestrator 只用于篇幅语义标注，
 # 单章内不改变逻辑；映射与 brief 一致：opening→short / middle→medium / long→long）
@@ -31,8 +30,8 @@ _STAGE_TO_STORY_LENGTH = {"opening": "short", "middle": "medium", "long": "long"
 class NovelAgentAdapter:
     """把主仓库完整流水线收敛成 generate(case) 接口。
 
-    消融开关 evolution_enabled 作为构造参数，供 Task 8 run_ablation 切换
-    进化 / 线性（legacy）两条路径。
+    消融开关 evolution_enabled 作为构造参数，供 run_ablation 切换人工拒绝后的处理路径。
+    主仓库当前仍构建同一套递归进化图，因此该开关不是完整的“无进化”对照。
     """
 
     name = "novel_agent"

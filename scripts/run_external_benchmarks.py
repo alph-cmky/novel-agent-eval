@@ -106,7 +106,7 @@ async def main() -> None:
                 results.append(res)
                 dims_brief = ", ".join(f"{k}={v:.0f}" for k, v in res.dims_mean.items())
                 print(f"[{res.agent}] {res.case} overall={res.overall_mean:.1f} | {dims_brief}", flush=True)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - one failed case must not abort the suite
                 print(f"[{agent.name}] {case.name} FAILED: {e}", flush=True)
 
     report = BenchmarkReport(

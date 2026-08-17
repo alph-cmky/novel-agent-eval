@@ -6,13 +6,11 @@ import pytest
 
 from novel_agent_eval.eqbench_judge import (
     CRITERIA,
-    NEGATIVE_CRITERIA,
     EQBenchJudge,
     eqbench_chapter_score,
     invert_if_negative,
     parse_eqbench_scores,
 )
-
 
 # ── mock client（对齐 test_judge 的 FakeClient 风格） ──────────────
 
@@ -64,13 +62,13 @@ def _chapter_response(**overrides) -> str:
 
 
 def _kwargs() -> dict:
-    return dict(
-        writing_prompt="Write a fantasy chapter.",
-        final_plan="The hero enters the city.",
-        character_profiles="Hero: brave.",
-        chapter_number=1,
-        chapter_text="The hero walked into the city.",
-    )
+    return {
+        "writing_prompt": "Write a fantasy chapter.",
+        "final_plan": "The hero enters the city.",
+        "character_profiles": "Hero: brave.",
+        "chapter_number": 1,
+        "chapter_text": "The hero walked into the city.",
+    }
 
 
 # ── parse_eqbench_scores ─────────────────────────────────────────

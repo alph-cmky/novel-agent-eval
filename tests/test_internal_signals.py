@@ -7,7 +7,11 @@
 - 回退用例：无 best 报告（evolution_enabled=False 仅当前轮报告）→ 用当前轮报告计算。
 - continuity_by_category：从 inconsistencies 列表按 category 计数。
 """
-from novel_agent.graph.evolution import EDITOR_DIMENSIONS, composite_score, extract_scores
+from novel_agent.graph.evolution import (
+    EDITOR_DIMENSIONS,
+    composite_score,
+    extract_scores,
+)
 
 from novel_agent_eval.internal_signals import InternalSignalCollector
 

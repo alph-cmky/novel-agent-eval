@@ -10,7 +10,12 @@ import json
 import statistics
 
 from novel_agent_eval.judge import QUALITY_DIMS
-from novel_agent_eval.report import DIM_LABELS, render_ablation, render_json, render_scorecard
+from novel_agent_eval.report import (
+    DIM_LABELS,
+    render_ablation,
+    render_json,
+    render_scorecard,
+)
 from novel_agent_eval.runner import BenchmarkReport, BenchmarkResult, CaseRun
 
 
@@ -87,7 +92,7 @@ def test_scorecard_renders_mean_plus_std_cell():
     report = BenchmarkReport(results=[r1, r2], repeat=1, agents=["novel_agent"], cases=["c1", "c2"])
 
     md = render_scorecard(report)
-    row = [ln for ln in md.splitlines() if ln.startswith("| novel_agent |")][0]
+    row = next(ln for ln in md.splitlines() if ln.startswith("| novel_agent |"))
 
     assert "85±3" in row
     assert "80±0" in row

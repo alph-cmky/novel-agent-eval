@@ -8,8 +8,10 @@
 """
 import asyncio
 import statistics
+from typing import ClassVar
 
 import pytest
+
 from novel_agent_eval.agents.base import GeneratedChapter
 from novel_agent_eval.constory import ConsistencyError, ConsistencyReport
 from novel_agent_eval.dataset.schema import EvalCase
@@ -244,7 +246,7 @@ class _RecordingAdapter:
     """记录构造参数，generate 返回固定产出（替代真 NovelAgentAdapter，避免跑主仓库 graph）。"""
 
     name = "recording_adapter"
-    constructed = []
+    constructed: ClassVar[list] = []
     generate_calls = 0
 
     def __init__(self, **kwargs):

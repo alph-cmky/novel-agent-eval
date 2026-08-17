@@ -9,7 +9,7 @@
   A. 优先用最终选定版本的报告（evolution_best_editor_report /
      evolution_best_continuity_report）；仅当 evolution_enabled 为真且两个 best
      报告都存在（非空 dict）时采用。否则回退当前轮 editor_report / continuity_report
-     （如 evolution_enabled=False 的 legacy 路径）。
+      （如关闭进化开关时没有 best 报告）。
   B. Continuity 原始数据没有 per-category 数值分，只有 inconsistencies 列表 →
      continuity_by_category 为各 category 的不一致条数（不发明 severity 权重）。
 """

@@ -1,2 +1,3 @@
-def hello() -> str:
-    return "Hello from novel-agent-eval!"
+"""Evaluation harness for long-form Agent writing systems."""
+
+__all__: list[str] = []

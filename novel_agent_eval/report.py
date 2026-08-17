@@ -107,8 +107,8 @@ def render_scorecard(report: BenchmarkReport) -> str:
         for run in r.runs:
             if r.stage in by_stage:
                 by_stage[r.stage].append(run)
-    for stage in STAGE_LABELS:
-        label = f"{STAGE_LABELS[stage]}案例均值"
+    for stage, stage_label in STAGE_LABELS.items():
+        label = f"{stage_label}案例均值"
         # 只取 composite_score 非 None 的 run；内部/外部均值与相关系数同用该子集，
         # 保证三列同口径（与"跳过 None"一致，且相关样本与均值样本相同）。
         valid = [run for run in by_stage[stage] if run.meta.get("composite_score") is not None]

@@ -35,7 +35,17 @@
 
 ## 仓库关系
 
-评测仓库通过 editable dependency 使用 `novel-agent`。本地开发时需要并列放置两个仓库：
+评测仓库默认通过 Git URL 引用 `novel-agent`，clone 后直接可用：
+
+```bash
+git clone https://github.com/alph-cmky/novel-agent-eval.git
+cd novel-agent-eval
+uv sync
+uv run pytest
+uv run ruff check .
+```
+
+本地开发时，如需同时修改两个仓库，可并列放置并覆盖为 editable 依赖：
 
 ```text
 qy/
@@ -45,13 +55,8 @@ qy/
 
 ```bash
 cd novel-agent-eval
-uv sync
-uv run pytest
-uv run ruff check .
+uv add --editable ../novel-agent
 ```
-
-当前评测框架依赖主仓库的本地路径，不是独立发布包。公开使用时请同时 clone 两个仓库，
-或将 `pyproject.toml` 中的 source 改为已发布的 Git revision。
 
 ## 运行评测
 

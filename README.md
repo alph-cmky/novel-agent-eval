@@ -13,6 +13,26 @@
 - EQ-Bench Longform：官方 5 步 planning、8 章连续生成和 14 维逐章评分。
 - 对手适配器：部分适配器是真实外部 CLI 接入，部分是用于方法对照的本地策略模拟，见下文。
 
+### 长篇评测
+
+8 章连续生成评测，覆盖跨章节质量衰减与一致性追踪：
+
+- **逐章指标**：每章记录 hash、长度、前文长度、硬约束状态和内部进化历史
+- **degradation 追踪**：计算 8 章质量均值与衰减趋势
+- **avg@N 重复采样**：同一 prompt 多次采样取均值，降低单次噪声
+- **并发执行**：Agent/seed 外层并发（`CONCURRENCY` 参数），每条 story 内部章节串行
+- **增量保存**：每章完成即写入进度文件，避免长时间运行的部分结果丢失
+- **连接级重试**：连接中断自动重试，story 级超时保护
+- **Story Session**：每个 Agent/seed 独立 `project_id` 和 `persist_dir`，章节正文写入 ChromaDB
+
+### 外部标准映射
+
+将 EQ-Bench 和 ConStory 的评测结果映射到内部质量维度：
+
+- EQ-Bench 14 维评分 → 内部 focus_dimensions / preserve / avoid
+- ConStory 错误类型（角色、时间线、世界观）→ 内部一致性维度
+- 生成修复指令模板，驱动进化改进计划
+
 ## 仓库关系
 
 评测仓库通过 editable dependency 使用 `novel-agent`。本地开发时需要并列放置两个仓库：
@@ -49,8 +69,12 @@ EQ-Bench Longform 需要独立的 bridge/judge 配置：
 
 ```bash
 DEEPSEEK_API_KEY=... STEPFUN_API_KEY=... \
+CONCURRENCY=4 \
 uv run python scripts/run_eqbench_longform.py
 ```
+
+`CONCURRENCY` 控制最多几条 story chain 并行（默认 1），每条 story 内部章节仍然串行。
+结果增量写入进度文件，中断后已完成的章节不会丢失。
 
 不要把 API Key 写入文件、报告或提交记录。
 
@@ -59,7 +83,7 @@ uv run python scripts/run_eqbench_longform.py
 - 自建集是 13 个带角色、时间线和世界观冲突的单章 hard cases，不等同于 50～100 章真实连续文本。
 - `ground_truth` 字段已定义，但当前没有用于计算伏笔回收率、大纲覆盖率或 bug precision/recall。
 - `NovelAgentAdapter` 为隔离评测使用空 `project_id`，不会读取真实项目数据库和完整向量记忆；结果不能直接代表生产项目的完整长程记忆能力。
-- 主仓库已移除非进化路径，`evolution_enabled` 参数已弃用（保留仅为兼容旧调用）；评测侧不再声称能做进化开关消融。
+- 主仓库已移除 `evolution_enabled` 参数，流水线始终使用递归自进化图；评测侧不再声称能做进化开关消融。
 - Judge 尚未完成人工标注校准；相关系数和单轮结果不应被解释为统计显著性证明。
 - `tokens` 在部分 adapter 中不可用，效率分主要由耗时和进化轮次计算。
 

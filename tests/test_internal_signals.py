@@ -1,10 +1,10 @@
 # tests/test_internal_signals.py
 """internal_signals.py 测试（全 mock，喂构造的 graph state dict，不跑 LLM / graph）。
 
-- 主用例：evolution_enabled=True 且存在 evolution_best_*_report →
+- 主用例：存在 evolution_best_*_report →
   用最终选定版本报告提取，composite_score 与
   novel_agent.graph.evolution.composite_score(extract_scores(...)) 一致。
-- 回退用例：无 best 报告（evolution_enabled=False 仅当前轮报告）→ 用当前轮报告计算。
+- 回退用例：无 best 报告 → 用当前轮报告计算。
 - continuity_by_category：从 inconsistencies 列表按 category 计数。
 """
 from novel_agent.graph.evolution import (
@@ -17,7 +17,7 @@ from novel_agent_eval.internal_signals import InternalSignalCollector
 
 
 def _best_state():
-    """evolution_enabled=True 且 best 报告已填充的完整 graph state。"""
+    """best 报告已填充的完整 graph state。"""
     best_editor = {
         "overall_score": 85,
         "dimensions": {"rhythm": 80, "ai_flavor": 70, "dialogue": 90, "logic": 75, "writing": 88},
@@ -35,7 +35,6 @@ def _best_state():
         "verdict": "minor_fix",
     }
     return {
-        "evolution_enabled": True,
         "evolution_round": 3,
         "evolution_termination": "converged",
         "evolution_best_editor_report": best_editor,
@@ -72,9 +71,8 @@ def test_collect_uses_best_reports_and_matches_evolution_composite():
 
 
 def test_collect_falls_back_to_current_round_reports():
-    """evolution_enabled=False、无 best 报告 → 用当前轮 editor/continuity 报告计算。"""
+    """无 best 报告 → 用当前轮 editor/continuity 报告计算。"""
     state = {
-        "evolution_enabled": False,
         "editor_report": {
             "overall_score": 60,
             "dimensions": {"rhythm": 50, "ai_flavor": 60, "dialogue": 70, "logic": 55, "writing": 65},

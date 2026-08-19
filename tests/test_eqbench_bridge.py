@@ -85,3 +85,10 @@ def test_plan_to_cases_produces_n_chapters():
 def test_plan_to_cases_word_target_override():
     cases = plan_to_cases(_plan(), word_target=3000)
     assert cases[0].word_target == 3000
+
+
+def test_plan_to_cases_compacts_shared_outline():
+    plan = _plan(writing_prompt="x" * 1000)
+    cases = plan_to_cases(plan, max_story_outline_chars=120)
+    assert len(cases[0].story_outline) <= 180
+    assert "planning context compacted" in cases[0].story_outline

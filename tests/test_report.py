@@ -148,13 +148,13 @@ def test_ablation_delta_sign():
                       dims_mean={d: 70.0 for d in QUALITY_DIMS},
                       dims_std={d: 0.0 for d in QUALITY_DIMS},
                       overall_mean=70.0, overall_std=0.0)
-    ablation = {"baseline": base, "evolution_enabled": ablated}
+    ablation = {"baseline": base, "max_rounds_0": ablated}
 
     md = render_ablation(ablation)
 
     assert "Δ vs 完整" in md
     assert "| baseline |" in md
-    assert "| evolution_enabled |" in md
+    assert "| max_rounds_0 |" in md
     assert "-8.5" in md
     assert "0.0" in md  # baseline 自身 Δ = 0.0
 

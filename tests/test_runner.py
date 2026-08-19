@@ -4,7 +4,7 @@
 - FakeAgent 返回固定 GeneratedChapter（meta 含 elapsed_seconds / tokens / evolution_rounds）。
 - FakeJudge 返回固定 JudgeScore（8 质量维）。
 - 覆盖：run_case 聚合均值±标准差、efficiency 并入 9 维加权、run_suite agent×case 全遍历、
-  run_ablation 对 evolution_enabled=False 正确切换 adapter、未实现消融名 raise。
+  run_ablation 对 max_rounds 配置正确切换 adapter、未实现消融名 raise。
 """
 import asyncio
 import statistics
@@ -257,22 +257,22 @@ class _RecordingAdapter:
         return GeneratedChapter("draft", _meta(elapsed=30, rounds=0))
 
 
-def test_run_ablation_switches_adapter_for_evolution_enabled(monkeypatch):
-    """evolution_enabled 消融 → NovelAgentAdapter(evolution_enabled=False)；基线为 True。"""
+def test_run_ablation_switches_adapter_for_round_budget(monkeypatch):
+    """max_rounds 消融使用不同的进化预算。"""
     import novel_agent_eval.runner as runner_mod
 
     _RecordingAdapter.constructed = []
     monkeypatch.setattr(runner_mod, "NovelAgentAdapter", _RecordingAdapter)
     judge = FakeJudge(_fixed_score())
 
-    results = _run(BenchmarkRunner(judge).run_ablation(_case(), modules=["evolution_enabled"]))
+    results = _run(BenchmarkRunner(judge).run_ablation(_case(), modules=["max_rounds_0"]))
 
-    assert set(results) == {"baseline", "evolution_enabled"}
+    assert set(results) == {"baseline", "max_rounds_0"}
     assert _RecordingAdapter.constructed == [
-        {"evolution_enabled": True},   # 基线：完整进化
-        {"evolution_enabled": False},  # 消融：关闭进化
+        {"max_rounds": 2, "label": "novel_agent"},
+        {"max_rounds": 0, "label": "novel_agent_r0"},
     ]
-    assert results["evolution_enabled"].dims_mean["consistency"] == 80
+    assert results["max_rounds_0"].dims_mean["consistency"] == 80
 
 
 def test_run_ablation_raises_for_unimplemented_modules(monkeypatch):

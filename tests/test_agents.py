@@ -157,7 +157,7 @@ def test_extract_meta_from_final_state():
         "continuity_report": {"overall_score": 85},
         "human_approved": True,
     }
-    meta = NovelAgentAdapter._extract_meta(values, elapsed=1.234, evolution_enabled=True)
+    meta = NovelAgentAdapter._extract_meta(values, elapsed=1.234)
 
     assert meta["composite_score"] == 82.5  # 历史里最高 composite
     assert meta["evolution_rounds"] == 3
@@ -166,13 +166,12 @@ def test_extract_meta_from_final_state():
     assert meta["editor_overall"] == 80
     assert meta["continuity_overall"] == 85
     assert meta["human_approved"] is True
-    assert meta["evolution_enabled"] is True
     assert meta["elapsed_seconds"] == 1.234
     assert meta["tokens"] is None  # 主仓库 state 无 token 字段
 
 
 def test_extract_meta_empty_history():
-    meta = NovelAgentAdapter._extract_meta({}, elapsed=0.5, evolution_enabled=False)
+    meta = NovelAgentAdapter._extract_meta({}, elapsed=0.5)
     assert meta["composite_score"] is None
     assert meta["evolution_rounds"] == 0
     assert meta["evolution_termination"] == ""
@@ -188,12 +187,11 @@ def test_extract_meta_empty_history():
 )
 def test_novel_agent_adapter_generate_integration():
     """真实跑主仓库进化流水线，产出章节正文 + meta 信号。"""
-    adapter = NovelAgentAdapter(evolution_enabled=True)
+    adapter = NovelAgentAdapter(max_rounds=2)
     gen = asyncio.run(adapter.generate(_make_case()))
 
     assert gen.content.strip(), "draft_content 不应为空"
     assert gen.meta["adapter"] == "novel_agent"
-    assert gen.meta["evolution_enabled"] is True
     assert "elapsed_seconds" in gen.meta
     # 至少跑完一轮进化，history 有记录
     assert gen.meta["evolution_rounds"] >= 1

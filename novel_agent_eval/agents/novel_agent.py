@@ -2,7 +2,7 @@
 """novel-agent 完整流水线适配器：跑主仓库单章 StateGraph 生成章节。
 
 调用范式对齐主仓库 novel_agent/api/routes.py / sse.py 的真实写法：
-  1. build_chapter_graph_async(persist_dir, evolution_enabled) 编译 graph
+1. build_chapter_graph_async(persist_dir) 编译 graph
   2. astream_events(initial_state, config, version="v2") 跑流水线
   3. 跑完 aget_state(config)：next 非空 → 在 human_review interrupt 处暂停
   4. 评测场景自动 approve：Command(resume={"action": "approve", ...}) 恢复并走完
@@ -12,12 +12,15 @@ persist_dir 缺省用每次调用的临时目录——注意不能传 ""：虽�
 为内存 MemorySaver，但主仓库 writer_node 仍会以 {persist_dir}/chroma_data 创建
 ChromaDB PersistentClient，传 "" 会在 cwd 落盘 chroma_data/ 污染仓库。
 """
+import re
 import tempfile
 import time
 import zlib
+from pathlib import Path
 
 from langgraph.types import Command
-from novel_agent.graph.chapter import aclose_checkpointers, build_chapter_graph_async
+from novel_agent.graph.chapter import build_chapter_graph_async
+from novel_agent.memory.embeddings import ChapterStore
 
 from novel_agent_eval.agents.base import GeneratedChapter
 from novel_agent_eval.dataset.schema import EvalCase
@@ -30,20 +33,42 @@ _STAGE_TO_STORY_LENGTH = {"opening": "short", "middle": "medium", "long": "long"
 class NovelAgentAdapter:
     """把主仓库完整流水线收敛成 generate(case) 接口。
 
-    消融开关 evolution_enabled 作为构造参数，供 run_ablation 切换人工拒绝后的处理路径。
+    ``max_rounds`` 控制单章最多进行多少轮自动进化。
     主仓库当前仍构建同一套递归进化图，因此该开关不是完整的“无进化”对照。
     """
 
     name = "novel_agent"
 
-    def __init__(self, evolution_enabled: bool = True, persist_dir: str | None = None):
-        self.evolution_enabled = evolution_enabled
+    def __init__(
+        self,
+        persist_dir: str | None = None,
+        max_rounds: int | None = None,
+        label: str | None = None,
+        skip_orchestrator: bool = False,
+        skip_reviews: bool = False,
+        skip_worldbuilding: bool = False,
+        review_interval: int = 1,
+        skip_evolution_enrichment: bool = False,
+        project_id: str = "",
+    ):
+        self.max_rounds = max_rounds
+        self.skip_orchestrator = skip_orchestrator
+        self.skip_reviews = skip_reviews
+        self.skip_worldbuilding = skip_worldbuilding
+        self.review_interval = max(review_interval, 1)
+        self.skip_evolution_enrichment = skip_evolution_enrichment
+        self.project_id = project_id
+        if label:
+            self.name = label
         # None → 每次 generate 用临时目录；也可显式指定（持久化调试用）
         self._persist_dir = persist_dir
 
     @staticmethod
     def _chapter_number(case: EvalCase) -> int:
-        """用 case 名确定性哈希得到章号（跨进程稳定，1..10000）。"""
+        """解析长篇 case 的真实章号，否则用稳定哈希生成。"""
+        chapter_match = re.search(r"(?:^|_)ch(\d+)(?:_|$)", case.name)
+        if chapter_match:
+            return int(chapter_match.group(1))
         return zlib.crc32(case.name.encode("utf-8")) % 10_000 + 1
 
     @staticmethod
@@ -79,8 +104,8 @@ class NovelAgentAdapter:
         # project_id 置空：主仓库 node 用 `if project_id:` 短路，跳过 ProjectManager
         # DB 读取与 ChromaDB 检索工具注册（writer/continuity 仅 project_id 非空才挂
         # search 工具，避免触发 embedding 模型下载）；评测场景无真实项目库，置空最干净。
-        return {
-            "project_id": "",
+        state = {
+            "project_id": case.project_id or self.project_id,
             "chapter_number": self._chapter_number(case),
             "chapter_outline": self._compose_chapter_outline(case),
             "story_length": _STAGE_TO_STORY_LENGTH.get(case.stage, "long"),
@@ -91,13 +116,30 @@ class NovelAgentAdapter:
             "world_context": "",
             "recent_summary": self._truncate_previous_context(case.previous_context),
             "existing_world_entities": [],
-            "persist_dir": persist_dir,
+            "persist_dir": case.persist_dir or persist_dir,
             "retry_count": 0,
         }
+        if self.max_rounds is not None:
+            state["evolution_max_rounds"] = self.max_rounds
+        if self.skip_orchestrator:
+            state["skip_orchestrator"] = True
+        if self.skip_reviews:
+            state["skip_reviews"] = True
+        if self.skip_worldbuilding:
+            state["skip_worldbuilding"] = True
+        state["review_interval"] = self.review_interval
+        if self.skip_evolution_enrichment:
+            state["skip_evolution_enrichment"] = True
+        return state
+
+    def index_chapter(self, *, project_id: str, persist_dir: str, chapter_number: int, content: str) -> None:
+        """Persist generated chapter text for subsequent longform retrieval."""
+        store = ChapterStore(Path(persist_dir) / "chroma_data")
+        store.index_chapter(project_id, chapter_number, content)
 
     @staticmethod
     def _extract_meta(
-        values: dict, elapsed: float, evolution_enabled: bool
+        values: dict, elapsed: float
     ) -> dict:
         """从最终 state 提取评测信号（供 Task 9 internal_signals）。"""
         history = values.get("evolution_history") or []
@@ -108,11 +150,13 @@ class NovelAgentAdapter:
         ]
         return {
             "adapter": "novel_agent",
-            "evolution_enabled": evolution_enabled,
             # composite_score 取进化历史里最高的 composite（无 history 时为 None）
             "composite_score": max(composites) if composites else None,
             "evolution_rounds": len(history),
+            "evolution_history": history,
             "evolution_termination": values.get("evolution_termination", ""),
+            "quality_guard_report": values.get("quality_guard_report", {}),
+            "evolution_best_quality_guard": values.get("evolution_best_quality_guard", {}),
             "evolution_best_version": values.get("evolution_best_version"),
             "editor_overall": (values.get("editor_report") or {}).get("overall_score"),
             "continuity_overall": (values.get("continuity_report") or {}).get("overall_score"),
@@ -123,7 +167,7 @@ class NovelAgentAdapter:
         }
 
     async def generate(self, case: EvalCase) -> GeneratedChapter:
-        persist_dir = self._persist_dir
+        persist_dir = self._persist_dir or case.persist_dir
         cleanup = None
         if persist_dir is None:
             persist_dir = tempfile.mkdtemp(prefix="novel_eval_")
@@ -134,7 +178,6 @@ class NovelAgentAdapter:
         try:
             graph = await build_chapter_graph_async(
                 persist_dir=persist_dir,
-                evolution_enabled=self.evolution_enabled,
             )
             initial_state = self._map_initial_state(case, persist_dir)
             config = {
@@ -164,11 +207,16 @@ class NovelAgentAdapter:
 
             elapsed = time.monotonic() - start
         finally:
-            # 关掉 AsyncSqliteSaver 的 aiosqlite 连接：其 worker thread 是非守护
-            # 线程，不关会在解释器退出时永久阻塞（进程挂死）。用主仓库公开的
-            # aclose_checkpointers() 统一收口（close 全部 + 清 cache），替代过去
-            # 直接 reach graph.checkpointer.conn 的脆弱写法。
-            await aclose_checkpointers()
+            # 仅关闭当前临时目录专属的 aiosqlite 连接，不影响其他并发协程的缓存连接
+            db_path = Path(persist_dir) / "checkpoints.db"
+            db_key = str(db_path.resolve())
+            from novel_agent.graph.chapter import _async_checkpointer_cache
+            saver = _async_checkpointer_cache.pop(db_key, None)
+            if saver and hasattr(saver, "conn") and saver.conn:
+                try:
+                    await saver.conn.close()
+                except Exception:  # noqa: BLE001, S110 - cleanup must not mask generation errors
+                    pass
             if cleanup:
                 cleanup()
 
@@ -176,7 +224,7 @@ class NovelAgentAdapter:
         content = (values.get("draft_content") or "").strip()
         return GeneratedChapter(
             content=content,
-            meta=self._extract_meta(values, elapsed, self.evolution_enabled),
+            meta=self._extract_meta(values, elapsed),
         )
 
 

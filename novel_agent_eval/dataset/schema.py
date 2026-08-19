@@ -21,3 +21,5 @@ class EvalCase(BaseModel):
     ground_truth: GroundTruth = Field(default_factory=GroundTruth)
     narrative_mode: str | None = None  # 激活验证用，API 直传
     narrative_perspective: str | None = None
+    project_id: str = ""
+    persist_dir: str | None = None

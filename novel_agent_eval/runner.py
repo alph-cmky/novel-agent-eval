@@ -131,23 +131,28 @@ def _mean_std(vals: list[float]) -> tuple[float, float]:
 
 # ── BenchmarkRunner ─────────────────────────────────────
 
-# 消融配置注册表：名称 → {desc, factory}。baseline 为完整进化对照。
-# 当前仅 evolution_enabled 可落地（关闭进化走线性闭环）；其余需主仓库加细粒度开关后实现，
-# 见 run_ablation 与 _NOT_IMPLEMENTED_ABLATIONS。
+# 消融配置注册表：名称 → {desc, factory}。所有配置都走同一 StateGraph，
+# 只改变自动进化预算；其它模块消融需要显式实现后再注册。
 _ABLATION_REGISTRY: dict[str, dict[str, Any]] = {
     "baseline": {
         "desc": "完整进化流水线（对照基线）",
-        "factory": lambda: NovelAgentAdapter(evolution_enabled=True),
+        "factory": lambda: NovelAgentAdapter(max_rounds=2, label="novel_agent"),
     },
-    "evolution_enabled": {
-        "desc": "有限消融：切换人工拒绝后的处理路径（不会移除递归进化图）",
-        "factory": lambda: NovelAgentAdapter(evolution_enabled=False),
+    "max_rounds_0": {
+        "desc": "仅初稿，不进行自动重写",
+        "factory": lambda: NovelAgentAdapter(max_rounds=0, label="novel_agent_r0"),
+    },
+    "max_rounds_1": {
+        "desc": "最多 1 轮自动重写",
+        "factory": lambda: NovelAgentAdapter(max_rounds=1, label="novel_agent_r1"),
+    },
+    "max_rounds_2": {
+        "desc": "最多 2 轮自动重写",
+        "factory": lambda: NovelAgentAdapter(max_rounds=2, label="novel_agent_r2"),
     },
 }
 
-# 主仓库 build_chapter_graph_async(persist_dir, evolution_enabled) 目前只有
-# evolution_enabled 一个开关（见 novel_agent/graph/chapter.py），以下消融需主仓库
-# 加「无 Continuity / 无 Worldbuilding / 无 EvoOrchestrator LLM 增强」等细粒度开关后实现。
+# 以下消融需主仓库后续增加细粒度开关后实现。
 _NOT_IMPLEMENTED_ABLATIONS = (
     "no_continuity",
     "no_worldbuilding",
@@ -173,13 +178,31 @@ class BenchmarkRunner:
 
     # -- run_case：单 case × repeat 次 → 聚合均值±标准差 --
 
-    async def run_case(self, agent, case, repeat: int | None = None) -> BenchmarkResult:
-        """跑单个 case repeat 次，并聚合各维与 overall 的均值±标准差。"""
+    async def run_case(
+        self,
+        agent,
+        case,
+        repeat: int | None = None,
+        *,
+        parallel_repeats: bool = False,
+    ) -> BenchmarkResult:
+        """跑单个 case repeat 次，并聚合各维与 overall 的均值±标准差。
+
+        ``parallel_repeats`` 适用于彼此独立的随机采样；调用方仍需通过外层
+        semaphore 控制总并发，避免同时占满模型供应商和本机资源。
+        """
         n = self._repeat if repeat is None else repeat
-        runs = []
-        for i in range(n):
-            run = await self._run_once_with_retry(agent, case, i)
-            runs.append(run)
+        if parallel_repeats:
+            runs = list(
+                await asyncio.gather(
+                    *(self._run_once_with_retry(agent, case, i) for i in range(n))
+                )
+            )
+        else:
+            runs = []
+            for i in range(n):
+                run = await self._run_once_with_retry(agent, case, i)
+                runs.append(run)
         return self._aggregate(agent, case, runs)
 
     async def _run_once_with_retry(self, agent, case, run_index: int) -> CaseRun:
@@ -260,8 +283,7 @@ class BenchmarkRunner:
     ) -> dict[str, BenchmarkResult]:
         """跑基线（完整进化）+ 每个消融配置，返回 {配置名: BenchmarkResult}。
 
-        modules 为配置名列表；当前可识别 "evolution_enabled"（→ NovelAgentAdapter
-        (evolution_enabled=False)）。其余消融（无 Continuity / Worldbuilding /
+         modules 为配置名列表；当前可识别 max_rounds_0/1/2。其余消融（无 Continuity / Worldbuilding /
         EvoOrchestrator LLM 增强）在主仓库加细粒度开关前明确 raise NotImplementedError，
         不假装实现。
         """
@@ -279,7 +301,7 @@ class BenchmarkRunner:
                 )
                 raise NotImplementedError(
                     f"消融配置 {name!r} 未实现{extra}：主仓库 build_chapter_graph_async "
-                    f"目前只有 evolution_enabled 一个开关，需主仓库加细粒度开关后实现"
+                    f"当前仅实现 max_rounds 预算消融，需主仓库增加细粒度开关"
                 )
 
         baseline_cfg = _ABLATION_REGISTRY["baseline"]

@@ -62,7 +62,7 @@ async def main() -> None:
     middle_cases = [c for c in all_cases if c.stage == "middle"]
     long_cases = [c for c in all_cases if c.stage == "long"]
 
-    novel_agent = NovelAgentAdapter(evolution_enabled=True)
+    novel_agent = NovelAgentAdapter(max_rounds=2)
     vanilla_agent = VanillaLLMAdapter()
 
     print(f"=== 启动全量分片高并发横评 (共 {len(all_cases)} 个用例, repeat={repeat}) ===", flush=True)

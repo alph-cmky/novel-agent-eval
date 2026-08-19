@@ -22,6 +22,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from statistics import fmean, pstdev
 
 STEPFUN_BASE_URL = "https://api.stepfun.com/step_plan/v1"
 
@@ -65,9 +66,42 @@ def load_prompts(n: int) -> list[dict]:
     return [data[k] for k in sorted(data, key=int)[:n]]
 
 
+def _serialize_result(result) -> dict:
+    return {
+        "agent": result.agent,
+        "prompt_id": result.prompt_id,
+        "sample_index": result.sample_index,
+        "title": result.title,
+        "mean_score": result.mean_score,
+        "eqbench_0_100": result.eqbench_0_100,
+        "degradation": result.degradation,
+        "chapter_scores": result.chapter_scores,
+        "chapters": [
+            {
+                "chapter_index": chapter.chapter_index,
+                "content_hash": chapter.content_hash,
+                "content_length": chapter.content_length,
+                "eqbench_score": chapter.eqbench_score,
+                "meta": chapter.meta,
+            }
+            for chapter in result.chapters
+        ],
+    }
+
+
 async def main() -> None:
-    n_prompts = int(os.environ.get("N_PROMPTS", "2"))
+    n_prompts = int(os.environ.get("N_PROMPTS", "12"))
+    repeat = int(os.environ.get("REPEAT", "2"))
     n_samples = int(os.environ.get("JUDGE_N_SAMPLES", "1"))
+    concurrency = int(os.environ.get("CONCURRENCY", "2"))
+    story_timeout = float(os.environ.get("STORY_TIMEOUT", "1200"))
+    novel_max_rounds = int(os.environ.get("NOVEL_MAX_ROUNDS", "2"))
+    novel_skip_orchestrator = os.environ.get("NOVEL_SKIP_ORCHESTRATOR", "1") == "1"
+    novel_skip_reviews = os.environ.get("NOVEL_SKIP_REVIEWS", "0") == "1"
+    novel_skip_worldbuilding = os.environ.get("NOVEL_SKIP_WORLDBUILDING", "0") == "1"
+    novel_review_interval = int(os.environ.get("NOVEL_REVIEW_INTERVAL", "2"))
+    novel_skip_enrichment = os.environ.get("NOVEL_SKIP_ENRICHMENT", "1") == "1"
+    max_story_outline_chars = int(os.environ.get("MAX_STORY_OUTLINE_CHARS", "12000"))
     target_pid = os.environ.get("PROMPT_INDEX", None)  # 1-indexed: "1" 或 "2"
 
     all_prompts = load_prompts(n_prompts)
@@ -79,9 +113,43 @@ async def main() -> None:
 
     bridge = EQBenchBridge()
     judge = EQBenchJudge(n_samples=n_samples)
-    agents = [NovelAgentAdapter(evolution_enabled=True), VanillaLLMAdapter()]
+    selected_agents = {
+        "novel_agent": NovelAgentAdapter(
+            max_rounds=novel_max_rounds,
+            skip_orchestrator=novel_skip_orchestrator,
+            skip_reviews=novel_skip_reviews,
+            skip_worldbuilding=novel_skip_worldbuilding,
+            review_interval=novel_review_interval,
+            skip_evolution_enrichment=novel_skip_enrichment,
+        ),
+        "vanilla_llm": VanillaLLMAdapter(),
+    }
+    agent_names = [name.strip() for name in os.environ.get(
+        "AGENTS", "novel_agent,vanilla_llm"
+    ).split(",") if name.strip()]
+    agents = [selected_agents[name] for name in agent_names]
+    semaphore = asyncio.Semaphore(concurrency)
+    out = Path(os.environ.get("EQBENCH_OUT", "/tmp/eqbench_longform.json"))
+    progress_out = out.with_name(f"{out.stem}.progress.json")
+
+    config_payload = {
+        "n_prompts": n_prompts,
+        "repeat": repeat,
+        "concurrency": concurrency,
+        "judge_n_samples": n_samples,
+        "story_timeout": story_timeout,
+        "novel_max_rounds": novel_max_rounds,
+        "novel_skip_orchestrator": novel_skip_orchestrator,
+        "novel_skip_reviews": novel_skip_reviews,
+        "novel_skip_worldbuilding": novel_skip_worldbuilding,
+        "novel_review_interval": novel_review_interval,
+        "novel_skip_enrichment": novel_skip_enrichment,
+        "max_story_outline_chars": max_story_outline_chars,
+        "agents": agent_names,
+    }
 
     results = []
+    failures = []
     for pid, prompt in prompts:
         writing_prompt = prompt["writing_prompt"]
         title = prompt["title"]
@@ -94,38 +162,94 @@ async def main() -> None:
             f"characters={len(plan.character_profiles)} chars",
             flush=True,
         )
-        for agent in agents:
-            try:
-                res = await run_longform(agent=agent, judge=judge, plan=plan)
-            except Exception as e:  # noqa: BLE001 — 单 prompt 偶发崩溃不中断整体横评
-                print(f"[{agent.name}] {title} FAILED: {type(e).__name__}: {e}", flush=True)
-                continue
-            results.append(res)
-            per_ch = "/".join(f"{s:.0f}" for s in res.chapter_scores)
-            print(
-                f"[{res.agent}] {res.title} 0-100={res.eqbench_0_100:.1f} "
-                f"degradation={res.degradation:+.2f} | {per_ch}",
-                flush=True,
+        async def run_one(agent, sample_index: int, prompt_id: int, prompt_title: str, run_plan):
+            async with semaphore:
+                try:
+                    res = await asyncio.wait_for(
+                        run_longform(
+                            agent=agent,
+                            judge=judge,
+                            plan=run_plan,
+                            sample_index=sample_index,
+                            max_story_outline_chars=max_story_outline_chars,
+                        ),
+                        timeout=story_timeout,
+                    )
+                except Exception as e:  # noqa: BLE001 — 单样本崩溃不中断整体横评
+                    failure = {
+                        "agent": agent.name,
+                        "prompt_id": str(prompt_id),
+                        "sample_index": sample_index,
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                    }
+                    print(
+                        f"[{agent.name}] {prompt_title} sample={sample_index} FAILED: "
+                        f"{type(e).__name__}: {e}",
+                        flush=True,
+                    )
+                    return None, failure
+                per_ch = "/".join(f"{s:.0f}" for s in res.chapter_scores)
+                print(
+                    f"[{res.agent}] {res.title} sample={sample_index} "
+                    f"0-100={res.eqbench_0_100:.1f} degradation={res.degradation:+.2f} | {per_ch}",
+                    flush=True,
+                )
+                return res, None
+
+        jobs = [
+            run_one(agent, sample_index, pid, title, plan)
+            for agent in agents
+            for sample_index in range(repeat)
+        ]
+        for completed in asyncio.as_completed(jobs):
+            result, failure = await completed
+            if result is not None:
+                results.append(result)
+            if failure is not None:
+                failures.append(failure)
+            progress_out.write_text(
+                json.dumps(
+                    {
+                        "config": config_payload,
+                        "failures": failures,
+                        "completed_results": [_serialize_result(r) for r in results],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
             )
 
     print("\n=== EQ-Bench Longform degradation 报告 ===\n")
     print(render_longform_table(results))
 
-    out = Path("/tmp/eqbench_longform.json")
+    by_agent = {}
+    for result in results:
+        by_agent.setdefault(result.agent, []).append(result)
+    summary = {}
+    for agent_name, agent_results in by_agent.items():
+        scores = [r.eqbench_0_100 for r in agent_results]
+        degradations = [r.degradation for r in agent_results]
+        summary[agent_name] = {
+            "samples": len(agent_results),
+            "mean_score": round(fmean(scores), 3),
+            "score_std": round(pstdev(scores), 3) if len(scores) > 1 else 0.0,
+            "mean_degradation": round(fmean(degradations), 3),
+            "degradation_std": round(pstdev(degradations), 3)
+            if len(degradations) > 1 else 0.0,
+        }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
     out.write_text(
         json.dumps(
-            [
-                {
-                    "agent": r.agent,
-                    "prompt_id": r.prompt_id,
-                    "title": r.title,
-                    "mean_score": r.mean_score,
-                    "eqbench_0_100": r.eqbench_0_100,
-                    "degradation": r.degradation,
-                    "chapter_scores": r.chapter_scores,
-                }
-                for r in results
-            ],
+            {
+                "config": config_payload,
+                "failures": failures,
+                "summary": summary,
+                "results": [_serialize_result(r) for r in results],
+            },
             ensure_ascii=False,
             indent=2,
         ),

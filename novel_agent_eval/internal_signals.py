@@ -6,10 +6,9 @@
 不重复实现（全局约束）。
 
 歧义解析（task-9 brief 权威版）：
-  A. 优先用最终选定版本的报告（evolution_best_editor_report /
-     evolution_best_continuity_report）；仅当 evolution_enabled 为真且两个 best
-     报告都存在（非空 dict）时采用。否则回退当前轮 editor_report / continuity_report
-      （如关闭进化开关时没有 best 报告）。
+   A. 优先用最终选定版本的报告（evolution_best_editor_report /
+      evolution_best_continuity_report）；两个 best 报告都存在（非空 dict）时采用，
+      否则回退当前轮 editor_report / continuity_report。
   B. Continuity 原始数据没有 per-category 数值分，只有 inconsistencies 列表 →
      continuity_by_category 为各 category 的不一致条数（不发明 severity 权重）。
 """
@@ -50,11 +49,10 @@ class InternalSignalCollector:
     @staticmethod
     def _pick_reports(state: dict) -> tuple[dict, dict]:
         """选择评分来源报告：优先最佳版本报告，缺省回退当前轮报告。"""
-        if state.get("evolution_enabled"):
-            best_editor = state.get("evolution_best_editor_report") or {}
-            best_continuity = state.get("evolution_best_continuity_report") or {}
-            if best_editor and best_continuity:
-                return best_editor, best_continuity
+        best_editor = state.get("evolution_best_editor_report") or {}
+        best_continuity = state.get("evolution_best_continuity_report") or {}
+        if best_editor and best_continuity:
+            return best_editor, best_continuity
         editor_report = state.get("editor_report") or {}
         continuity_report = state.get("continuity_report") or {}
         return editor_report, continuity_report

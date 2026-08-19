@@ -63,7 +63,7 @@ def _build_agent_list(agent_names: list[str]) -> list:
     for name in agent_names:
         name = name.strip().lower()
         if name in ("novel_agent", "novel-agent", "novel"):
-            agents.append(NovelAgentAdapter(evolution_enabled=True))
+            agents.append(NovelAgentAdapter(max_rounds=2))
         elif name in ("vanilla_llm", "vanilla"):
             agents.append(VanillaLLMAdapter())
         elif name in ("inkos",):

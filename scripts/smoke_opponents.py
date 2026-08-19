@@ -34,7 +34,7 @@ NWA_TARBALL_URL = "https://codeload.github.com/xindaaW/NovelWritingAgent/tar.gz/
 
 def _stepfun_model() -> ModelConfig:
     return ModelConfig(
-        base_url=os.environ.get("STEPFUN_BASE_URL", "https://api.stepfun.ai/v1"),
+        base_url=os.environ.get("STEPFUN_BASE_URL", "https://api.stepfun.com/step_plan/v1"),
         api_key=os.environ.get("STEPFUN_API_KEY", ""),
         model=os.environ.get("STEPFUN_MODEL", "step-3.7-flash"),
     )
@@ -126,16 +126,25 @@ async def main() -> None:
         except Exception as e:  # noqa: BLE001
             print(f"[nwa] 环境准备失败：{type(e).__name__}: {e}")
 
+    selected = os.environ.get("SMOKE_AGENTS", "inkos,nwa").split(",")
+    tasks = {
+        "inkos": _smoke_inkos,
+        "nwa": _smoke_nwa,
+    }
     results = {}
-    for name, coro in [("inkos", _smoke_inkos()), ("nwa", _smoke_nwa())]:
-        results[name] = await coro
+    for name in selected:
+        name = name.strip()
+        if name not in tasks:
+            print(f"[smoke] 未知 Agent：{name}")
+            continue
+        results[name] = await tasks[name]()
 
     print("\n=== 冒烟汇总 ===")
     for name, r in results.items():
         status = "OK" if r["ok"] else "FAIL"
         why = f"（{r['why']}）" if r.get("why") else ""
         print(f"  {name}: {status}{why}")
-    if not all(r["ok"] for r in results.values()):
+    if not results or not all(r["ok"] for r in results.values()):
         sys.exit(1)
 
 

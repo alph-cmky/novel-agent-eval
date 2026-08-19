@@ -11,11 +11,30 @@ degradation 为横评自建指标（官方无此定义）：尾段均值 - 首�
 """
 
 import asyncio
+import hashlib
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
 from novel_agent_eval.eqbench_bridge import LongformPlan, plan_to_cases
 from novel_agent_eval.eqbench_judge import EQBenchJudge, eqbench_chapter_score
+
+
+def _retryable_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "429",
+            "rate_limited",
+            "concurrency",
+            "remoteprotocol",
+            "incomplete chunked",
+            "connection reset",
+            "server disconnected",
+        )
+    )
 
 
 @dataclass
@@ -27,6 +46,14 @@ class ChapterResult:
     eqbench_score: float | None  # 0-20 加权单章分
     content: str
     meta: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def content_hash(self) -> str:
+        return hashlib.sha256(self.content.encode("utf-8")).hexdigest()
+
+    @property
+    def content_length(self) -> int:
+        return len(self.content)
 
 
 @dataclass
@@ -41,6 +68,7 @@ class LongformResult:
     mean_score: float            # 8 章均值（0-20）
     eqbench_0_100: float         # mean × 5
     degradation: float           # 尾段均值 - 首段均值（负=衰减）
+    sample_index: int = 0
 
     @property
     def chapter_scores(self) -> list[float]:
@@ -63,51 +91,77 @@ async def run_longform(
     plan: LongformPlan,
     word_target: int = 1000,
     degradation_window: int = 2,
+    sample_index: int = 0,
+    max_story_outline_chars: int | None = None,
 ) -> LongformResult:
     """跑一条 prompt 的 8 章连载并逐章评分，聚合 0-100 + degradation。"""
-    cases = plan_to_cases(plan, word_target=word_target)
+    cases = plan_to_cases(
+        plan,
+        word_target=word_target,
+        max_story_outline_chars=max_story_outline_chars,
+    )
     chapters: list[ChapterResult] = []
     context = ""
-    for i, case in enumerate(cases, start=1):
-        case.previous_context = context
-        gen = None
-        for attempt in range(5):
-            try:
-                gen = await agent.generate(case)
-                break
-            except Exception as e:
-                if "429" in str(e) or "concurrency" in str(e).lower():
-                    await asyncio.sleep(3.0 * (attempt + 1))
-                    continue
-                raise
+    story_persist_dir = tempfile.mkdtemp(prefix="novel_longform_")
+    story_project_id = f"longform_{plan.prompt_id}_{sample_index}_{agent.name}"
+    try:
+        for i, case in enumerate(cases, start=1):
+            case.previous_context = context
+            case.project_id = story_project_id
+            case.persist_dir = story_persist_dir
+            gen = None
+            for attempt in range(5):
+                try:
+                    gen = await agent.generate(case)
+                    break
+                except Exception as e:
+                    if _retryable_error(e):
+                        await asyncio.sleep(3.0 * (attempt + 1))
+                        continue
+                    raise
 
-        scores = None
-        for attempt in range(5):
-            try:
-                scores = await judge.score_chapter(
-                    writing_prompt=plan.writing_prompt,
-                    final_plan=plan.final_plan,
-                    character_profiles=plan.character_profiles,
+            if hasattr(agent, "index_chapter"):
+                agent.index_chapter(
+                    project_id=story_project_id,
+                    persist_dir=story_persist_dir,
                     chapter_number=i,
-                    chapter_text=gen.content,
+                    content=gen.content,
                 )
-                break
-            except Exception as e:
-                if "429" in str(e) or "concurrency" in str(e).lower():
-                    await asyncio.sleep(3.0 * (attempt + 1))
-                    continue
-                raise
-        eq = eqbench_chapter_score(scores)
-        chapters.append(
-            ChapterResult(
-                chapter_index=i,
-                scores=scores,
-                eqbench_score=eq,
-                content=gen.content,
-                meta=gen.meta,
+
+            scores = None
+            for attempt in range(5):
+                try:
+                    scores = await judge.score_chapter(
+                        writing_prompt=plan.writing_prompt,
+                        final_plan=plan.final_plan,
+                        character_profiles=plan.character_profiles,
+                        chapter_number=i,
+                        chapter_text=gen.content,
+                    )
+                    break
+                except Exception as e:
+                    if _retryable_error(e):
+                        await asyncio.sleep(3.0 * (attempt + 1))
+                        continue
+                    raise
+            eq = eqbench_chapter_score(scores)
+            chapter_meta = dict(gen.meta)
+            chapter_meta["previous_context_length"] = len(context)
+            chapter_meta["target_word_count"] = case.word_target
+            chapter_meta["memory_project_id"] = story_project_id
+            chapter_meta["memory_persist_dir"] = story_persist_dir
+            chapters.append(
+                ChapterResult(
+                    chapter_index=i,
+                    scores=scores,
+                    eqbench_score=eq,
+                    content=gen.content,
+                    meta=chapter_meta,
+                )
             )
-        )
-        context += f"\n\n[Chapter {i}]\n{gen.content}"
+            context += f"\n\n[Chapter {i}]\n{gen.content}"
+    finally:
+        shutil.rmtree(story_persist_dir, ignore_errors=True)
 
     valid = [c.eqbench_score for c in chapters if c.eqbench_score is not None]
     mean = round(sum(valid) / len(valid), 3) if valid else 0.0
@@ -121,6 +175,7 @@ async def run_longform(
         mean_score=mean,
         eqbench_0_100=round(mean * 5, 3),
         degradation=deg if deg is not None else 0.0,
+        sample_index=sample_index,
     )
 
 

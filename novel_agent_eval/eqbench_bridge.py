@@ -84,13 +84,18 @@ class EQBenchBridge:
         return messages
 
     async def _request(self, messages: list[dict]) -> str:
-        resp = await self._client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            temperature=0.9,      # planning 发散创作
-            max_tokens=4096,
-        )
-        return resp.choices[0].message.content or ""
+        for attempt in range(3):
+            resp = await self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                temperature=0.9,      # planning 发散创作
+                max_tokens=8192,
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+            content = resp.choices[0].message.content or ""
+            if content.strip() or attempt == 2:
+                return content
+        return ""
 
     async def plan(
         self,
@@ -105,6 +110,10 @@ class EQBenchBridge:
         for step_num in range(1, NUM_PLANNING_STEPS + 1):
             messages = self._build_messages(step_num, writing_prompt, outputs)
             outputs[str(step_num)] = await self._request(messages)
+        if not outputs["4"].strip() or not outputs["5"].strip():
+            raise RuntimeError(
+                "EQ-Bench planning incomplete: final_plan and character_profiles are required"
+            )
         return LongformPlan(
             prompt_id=prompt_id,
             title=title,
@@ -117,7 +126,12 @@ class EQBenchBridge:
         )
 
 
-def plan_to_cases(plan: LongformPlan, *, word_target: int = 1000) -> list[EvalCase]:
+def plan_to_cases(
+    plan: LongformPlan,
+    *,
+    word_target: int = 1000,
+    max_story_outline_chars: int | None = None,
+) -> list[EvalCase]:
     """LongformPlan → n_chapters 个 EvalCase（连载链，previous_context 运行时填充）。
 
     对齐官方 chapter 生成：被测模型无多轮历史，须把完整 plan（final_plan +
@@ -133,6 +147,14 @@ def plan_to_cases(plan: LongformPlan, *, word_target: int = 1000) -> list[EvalCa
         ]
         if s
     )
+    if max_story_outline_chars and len(story_outline) > max_story_outline_chars:
+        head_chars = max_story_outline_chars // 2
+        tail_chars = max_story_outline_chars - head_chars
+        story_outline = (
+            story_outline[:head_chars]
+            + "\n\n[...planning context compacted for all agents...]\n\n"
+            + story_outline[-tail_chars:]
+        )
     cases: list[EvalCase] = []
     for i in range(1, plan.n_chapters + 1):
         cases.append(

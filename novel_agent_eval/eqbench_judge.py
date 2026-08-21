@@ -48,6 +48,7 @@ def _load_weights() -> dict[str, float]:
 CRITERIA = _load_lines("criteria_chapter.txt")                      # 14 维（8 正向 + 6 负向）
 NEGATIVE_CRITERIA = _load_lines("negative_criteria_chapter.txt")    # 6 负向（lower is better）
 CRITERIA_WEIGHTS = _load_weights()
+_CRITERIA_KEYS = {c.lower().strip() for c in CRITERIA}
 
 
 def invert_if_negative(metric: str, score: float, negative: list[str] | None = None) -> float:
@@ -60,6 +61,9 @@ def invert_if_negative(metric: str, score: float, negative: list[str] | None = N
 
 def eqbench_chapter_score(scores: dict[str, float]) -> float | None:
     """单章 14 维原始分 → 0-20 加权分（对齐官方 calculate_task_score 逐章逻辑）。"""
+    # 缺维度是 invalid，不允许用剩余维度算出看似正常的高分。
+    if not isinstance(scores, dict) or {k.lower().strip() for k in scores} != _CRITERIA_KEYS:
+        return None
     weighted_sum = 0.0
     total_weight = 0.0
     for metric, value in scores.items():
@@ -190,9 +194,9 @@ class EQBenchJudge:
         for _ in range(self._max_attempts):
             content = await self._request(prompt)
             scores = parse_eqbench_scores(content)
-            if scores:
+            if {k.lower().strip() for k in scores} == _CRITERIA_KEYS:
                 return scores
-        return scores  # 重试耗尽：空 dict
+        return {}  # 重试耗尽或维度不完整：显式 invalid
 
     async def score_chapter(
         self,

@@ -65,10 +65,16 @@ class LongformResult:
     title: str
     plan: LongformPlan
     chapters: list[ChapterResult]
-    mean_score: float            # 8 章均值（0-20）
-    eqbench_0_100: float         # mean × 5
-    degradation: float           # 尾段均值 - 首段均值（负=衰减）
+    mean_score: float | None     # 任一章节 invalid 时为 None
+    eqbench_0_100: float | None  # mean × 5
+    degradation: float | None    # 任一章节 invalid 时为 None
     sample_index: int = 0
+    valid_chapters: int = 0
+    completion_rate: float = 0.0
+    first_window_score: float | None = None
+    middle_window_score: float | None = None
+    last_window_score: float | None = None
+    trend_slope: float | None = None
 
     @property
     def chapter_scores(self) -> list[float]:
@@ -82,6 +88,22 @@ def degradation_score(scores: list[float], window: int = 2) -> float | None:
     head = sum(scores[:window]) / window
     tail = sum(scores[-window:]) / window
     return round(tail - head, 3)
+
+
+def _window_mean(scores: list[float], start: int, width: int) -> float | None:
+    window = scores[start:start + width]
+    return round(sum(window) / width, 3) if len(window) == width else None
+
+
+def _trend_slope(scores: list[float]) -> float | None:
+    """Return the least-squares score trend per chapter."""
+    if len(scores) < 2:
+        return None
+    x_mean = (len(scores) - 1) / 2
+    y_mean = sum(scores) / len(scores)
+    denominator = sum((i - x_mean) ** 2 for i in range(len(scores)))
+    numerator = sum((i - x_mean) * (score - y_mean) for i, score in enumerate(scores))
+    return round(numerator / denominator, 3) if denominator else None
 
 
 async def run_longform(
@@ -163,9 +185,17 @@ async def run_longform(
     finally:
         shutil.rmtree(story_persist_dir, ignore_errors=True)
 
-    valid = [c.eqbench_score for c in chapters if c.eqbench_score is not None]
-    mean = round(sum(valid) / len(valid), 3) if valid else 0.0
-    deg = degradation_score(valid, window=degradation_window)
+    valid = [c.eqbench_score for c in chapters]
+    complete = all(score is not None for score in valid)
+    values = [score for score in valid if score is not None]
+    mean = round(sum(values) / len(values), 3) if complete and values else None
+    deg = degradation_score(values, window=degradation_window) if complete else None
+    first = _window_mean(values, 0, degradation_window) if complete else None
+    middle_start = max((len(values) - degradation_window) // 2, 0)
+    middle = _window_mean(values, middle_start, degradation_window) if complete else None
+    last = _window_mean(
+        values, len(values) - degradation_window, degradation_window
+    ) if complete else None
     return LongformResult(
         agent=agent.name,
         prompt_id=plan.prompt_id,
@@ -173,9 +203,15 @@ async def run_longform(
         plan=plan,
         chapters=chapters,
         mean_score=mean,
-        eqbench_0_100=round(mean * 5, 3),
-        degradation=deg if deg is not None else 0.0,
+        eqbench_0_100=round(mean * 5, 3) if mean is not None else None,
+        degradation=deg,
         sample_index=sample_index,
+        valid_chapters=len(values),
+        completion_rate=round(len(values) / len(cases), 3) if cases else 0.0,
+        first_window_score=first,
+        middle_window_score=middle,
+        last_window_score=last,
+        trend_slope=_trend_slope(values) if complete else None,
     )
 
 
@@ -186,15 +222,25 @@ def render_longform_table(results: list[LongformResult]) -> str:
     degradation 为负表示长程质量随连载衰减，是 EQ-Bench Longform 的核心观测。
     """
     lines = [
-        "| agent | title | eqbench(0-100) | mean(0-20) | degradation | per-chapter |",
-        "|---|---|---|---|---|---|",
+        "| agent | title | eqbench(0-100) | completion | first/mid/last | trend | degradation | per-chapter |",
+        "|---|---|---:|---:|---|---:|---:|---|",
     ]
     for r in results:
         per_chapter = "/".join(
-            f"{s:.0f}" for s in r.chapter_scores
+            f"{s:.0f}" if s is not None else "—" for s in
+            [c.eqbench_score for c in r.chapters]
         )
+        score = f"{r.eqbench_0_100:.1f}" if r.eqbench_0_100 is not None else "—"
+        windows = (
+            f"{r.first_window_score:.1f}/{r.middle_window_score:.1f}/"
+            f"{r.last_window_score:.1f}"
+            if r.first_window_score is not None
+            else "—"
+        )
+        trend = f"{r.trend_slope:+.2f}" if r.trend_slope is not None else "—"
+        degradation = f"{r.degradation:+.2f}" if r.degradation is not None else "—"
         lines.append(
-            f"| {r.agent} | {r.title} | {r.eqbench_0_100:.1f} | {r.mean_score:.1f} "
-            f"| {r.degradation:+.2f} | {per_chapter} |"
+            f"| {r.agent} | {r.title} | {score} | {r.completion_rate:.1%} "
+            f"| {windows} | {trend} | {degradation} | {per_chapter} |"
         )
     return "\n".join(lines)

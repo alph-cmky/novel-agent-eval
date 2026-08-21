@@ -2,8 +2,6 @@
 """EQBenchJudge mock 测试：不消耗真实 DeepSeek API。"""
 import asyncio
 
-import pytest
-
 from novel_agent_eval.eqbench_judge import (
     CRITERIA,
     EQBenchJudge,
@@ -109,24 +107,28 @@ def test_invert_if_negative():
 
 
 def test_eqbench_chapter_score_forced_poetry_scaling():
-    # 仅 forced poetry 一维：反转后 10 → (10/20)^1.7*20 ≈ 6.156，权重 5 约掉
-    expected = (10 / 20) ** 1.7 * 20
-    assert eqbench_chapter_score({"Forced Poetry or Metaphor": 10}) == pytest.approx(expected)
+    # 单维输入不应被当作正常分数。
+    assert eqbench_chapter_score({"Forced Poetry or Metaphor": 10}) is None
 
 
 def test_eqbench_chapter_score_weighted_mean():
-    # 两正向 20 + 两负向 20（反转后 0）：加权 40/8 = 5.0
+    # 缺少其余维度时不应以部分数据计算高分。
     scores = {
         "Nuanced Characters": 20,
         "Emotionally Engaging": 20,
         "Forced Poetry or Metaphor": 20,  # weight 5, 反转后 0
         "Purple Prose": 20,               # weight 1, 反转后 0
     }
-    assert eqbench_chapter_score(scores) == pytest.approx(5.0)
+    assert eqbench_chapter_score(scores) is None
 
 
 def test_eqbench_chapter_score_empty_returns_none():
     assert eqbench_chapter_score({}) is None
+
+
+def test_eqbench_chapter_score_partial_returns_none():
+    scores = {"Nuanced Characters": 20, "Emotionally Engaging": 20}
+    assert eqbench_chapter_score(scores) is None
 
 
 # ── EQBenchJudge ─────────────────────────────────────────────────
@@ -160,6 +162,14 @@ def test_score_chapter_retries_on_empty_parse():
     scores = asyncio.run(judge.score_chapter(**_kwargs()))
     assert scores == {}
     assert client.chat.completions.calls == 3
+
+
+def test_score_chapter_retries_on_partial_parse():
+    client = _FakeClient("Nuanced Characters: [20]")
+    judge = EQBenchJudge(client=client, max_attempts=2)
+    scores = asyncio.run(judge.score_chapter(**_kwargs()))
+    assert scores == {}
+    assert client.chat.completions.calls == 2
 
 
 def test_score_chapter_median_across_samples():

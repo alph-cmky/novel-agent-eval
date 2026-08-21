@@ -142,6 +142,7 @@ def test_check_consistency_failed_category_degrades():
     assert len(report.timeline) == 1
     assert report.timeline[0].subtype == "timeline_plot_absolute_time_contradictions"
     assert report.total == 1
+    assert report.failed_categories == ["characterization"]
 
 
 def test_split_chatml_extracts_system_and_user():

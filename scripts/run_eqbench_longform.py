@@ -56,6 +56,7 @@ from novel_agent_eval.agents.vanilla_llm import VanillaLLMAdapter
 from novel_agent_eval.eqbench_bridge import EQBenchBridge
 from novel_agent_eval.eqbench_judge import EQBenchJudge
 from novel_agent_eval.longform import render_longform_table, run_longform
+from novel_agent_eval.manifest import build_run_manifest
 
 _PROMPTS_PATH = Path("novel_agent_eval/dataset/eqbench/prompts.json")
 
@@ -75,6 +76,12 @@ def _serialize_result(result) -> dict:
         "mean_score": result.mean_score,
         "eqbench_0_100": result.eqbench_0_100,
         "degradation": result.degradation,
+        "valid_chapters": result.valid_chapters,
+        "completion_rate": result.completion_rate,
+        "first_window_score": result.first_window_score,
+        "middle_window_score": result.middle_window_score,
+        "last_window_score": result.last_window_score,
+        "trend_slope": result.trend_slope,
         "chapter_scores": result.chapter_scores,
         "chapters": [
             {
@@ -87,6 +94,17 @@ def _serialize_result(result) -> dict:
             for chapter in result.chapters
         ],
     }
+
+
+def _write_json_atomic(path: Path, payload: object) -> None:
+    """Write a checkpoint without leaving a truncated JSON file on interruption."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 async def main() -> None:
@@ -131,6 +149,8 @@ async def main() -> None:
     semaphore = asyncio.Semaphore(concurrency)
     out = Path(os.environ.get("EQBENCH_OUT", "/tmp/eqbench_longform.json"))
     progress_out = out.with_name(f"{out.stem}.progress.json")
+    partial_out = out.with_name(f"{out.stem}.partial_results.json")
+    failures_out = out.with_name(f"{out.stem}.failures.json")
 
     config_payload = {
         "n_prompts": n_prompts,
@@ -147,16 +167,59 @@ async def main() -> None:
         "max_story_outline_chars": max_story_outline_chars,
         "agents": agent_names,
     }
+    manifest = build_run_manifest(config_payload, _PROMPTS_PATH)
 
     results = []
     failures = []
+
+    def persist_partial() -> None:
+        _write_json_atomic(
+            partial_out,
+            {
+                "config": config_payload,
+                "manifest": manifest,
+                "results": [_serialize_result(r) for r in results],
+            },
+        )
+        _write_json_atomic(
+            failures_out,
+            {"config": config_payload, "manifest": manifest, "failures": failures},
+        )
+        # Keep the legacy combined checkpoint for callers that already consume it.
+        _write_json_atomic(
+            progress_out,
+            {
+                "config": config_payload,
+                "manifest": manifest,
+                "failures": failures,
+                "completed_results": [_serialize_result(r) for r in results],
+            },
+        )
+
+    # Create usable empty checkpoints before the first network request.
+    persist_partial()
+
     for pid, prompt in prompts:
         writing_prompt = prompt["writing_prompt"]
         title = prompt["title"]
         # 同一 prompt 的 plan 只跑一次 bridge，两个 agent 共享（省一半 planning 调用）
-        plan = await bridge.plan(
-            writing_prompt, prompt_id=str(pid), title=title, category=prompt["category"]
-        )
+        try:
+            plan = await bridge.plan(
+                writing_prompt, prompt_id=str(pid), title=title, category=prompt["category"]
+            )
+        except Exception as e:  # noqa: BLE001 — planning 失败不中断其它 prompt
+            failures.append(
+                {
+                    "stage": "planning",
+                    "prompt_id": str(pid),
+                    "title": title,
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                }
+            )
+            print(f"[plan] {title} FAILED: {type(e).__name__}: {e}", flush=True)
+            persist_partial()
+            continue
         print(
             f"[plan] {title}: final_plan={len(plan.final_plan)} chars, "
             f"characters={len(plan.character_profiles)} chars",
@@ -189,12 +252,23 @@ async def main() -> None:
                         flush=True,
                     )
                     return None, failure
-                per_ch = "/".join(f"{s:.0f}" for s in res.chapter_scores)
-                print(
-                    f"[{res.agent}] {res.title} sample={sample_index} "
-                    f"0-100={res.eqbench_0_100:.1f} degradation={res.degradation:+.2f} | {per_ch}",
-                    flush=True,
+                per_ch = "/".join(
+                    f"{s:.0f}" if s is not None else "NA"
+                    for s in res.chapter_scores
                 )
+                if res.eqbench_0_100 is None:
+                    print(
+                        f"[{res.agent}] {res.title} sample={sample_index} INVALID "
+                        f"degradation={res.degradation} | {per_ch}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[{res.agent}] {res.title} sample={sample_index} "
+                        f"0-100={res.eqbench_0_100:.1f} "
+                        f"degradation={res.degradation:+.2f} | {per_ch}",
+                        flush=True,
+                    )
                 return res, None
 
         jobs = [
@@ -208,19 +282,7 @@ async def main() -> None:
                 results.append(result)
             if failure is not None:
                 failures.append(failure)
-            progress_out.write_text(
-                json.dumps(
-                    {
-                        "config": config_payload,
-                        "failures": failures,
-                        "completed_results": [_serialize_result(r) for r in results],
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
+            persist_partial()
 
     print("\n=== EQ-Bench Longform degradation 报告 ===\n")
     print(render_longform_table(results))
@@ -230,32 +292,32 @@ async def main() -> None:
         by_agent.setdefault(result.agent, []).append(result)
     summary = {}
     for agent_name, agent_results in by_agent.items():
-        scores = [r.eqbench_0_100 for r in agent_results]
-        degradations = [r.degradation for r in agent_results]
+        valid_results = [r for r in agent_results if r.eqbench_0_100 is not None]
+        scores = [r.eqbench_0_100 for r in valid_results]
+        degradations = [r.degradation for r in valid_results if r.degradation is not None]
         summary[agent_name] = {
             "samples": len(agent_results),
-            "mean_score": round(fmean(scores), 3),
-            "score_std": round(pstdev(scores), 3) if len(scores) > 1 else 0.0,
-            "mean_degradation": round(fmean(degradations), 3),
+            "valid_samples": len(valid_results),
+            "invalid_samples": len(agent_results) - len(valid_results),
+            "mean_score": round(fmean(scores), 3) if scores else None,
+            "score_std": round(pstdev(scores), 3) if len(scores) > 1 else None,
+            "mean_degradation": round(fmean(degradations), 3) if degradations else None,
             "degradation_std": round(pstdev(degradations), 3)
             if len(degradations) > 1 else 0.0,
         }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
-    out.write_text(
-        json.dumps(
-            {
-                "config": config_payload,
-                "failures": failures,
-                "summary": summary,
-                "results": [_serialize_result(r) for r in results],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    _write_json_atomic(
+        out,
+        {
+            "config": config_payload,
+            "manifest": manifest,
+            "failures": failures,
+            "summary": summary,
+            "results": [_serialize_result(r) for r in results],
+        },
     )
-    print(f"\n结果已存 {out}")
+    print(f"\n结果已存 {out}，部分结果已存 {partial_out}，失败记录已存 {failures_out}")
 
 
 if __name__ == "__main__":

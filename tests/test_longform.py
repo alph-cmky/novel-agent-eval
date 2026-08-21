@@ -78,6 +78,10 @@ def test_run_longform_generates_8_chapters_with_context():
     assert result.mean_score > 0
     assert result.eqbench_0_100 == pytest.approx(result.mean_score * 5)
     assert result.degradation == 0.0  # 每章分恒定，无衰减
+    assert result.completion_rate == 1.0
+    assert result.first_window_score == pytest.approx(result.middle_window_score)
+    assert result.middle_window_score == pytest.approx(result.last_window_score)
+    assert result.trend_slope == 0.0
 
 
 def test_run_longform_degradation_negative_when_tail_drops():
@@ -97,6 +101,22 @@ def test_run_longform_degradation_negative_when_tail_drops():
 
     result = asyncio.run(run_longform(agent=agent, judge=_DecliningJudge(), plan=_plan()))
     assert result.degradation < 0
+
+
+def test_run_longform_invalid_chapter_does_not_become_zero_degradation():
+    agent = _FakeAgent()
+
+    class _InvalidJudge:
+        async def score_chapter(self, **kwargs):
+            return {} if kwargs["chapter_number"] == 3 else _full_scores()
+
+    result = asyncio.run(run_longform(agent=agent, judge=_InvalidJudge(), plan=_plan()))
+    assert result.mean_score is None
+    assert result.eqbench_0_100 is None
+    assert result.degradation is None
+    assert result.chapters[2].eqbench_score is None
+    assert result.valid_chapters == 7
+    assert result.completion_rate == pytest.approx(0.875)
 
 
 def test_render_longform_table():

@@ -94,6 +94,7 @@ def test_score_garbage_retries_then_all_zero():
     assert set(score.dimensions) == set(QUALITY_DIMS)
     assert all(v == 0 for v in score.dimensions.values())
     assert score.overall == 0
+    assert score.valid is False
 
 
 def test_score_accepts_flat_dimensions():
@@ -107,6 +108,7 @@ def test_score_accepts_flat_dimensions():
     assert score.dimensions["consistency"] == 85
     assert score.dimensions["controllability"] == 65
     assert score.overall == 77
+    assert score.valid is True
 
 
 def test_score_accepts_flat_dimensions_missing_dim():

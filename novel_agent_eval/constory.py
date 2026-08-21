@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from novel_agent_eval.vendor.constory.judge import (
     EVALUATION_CRITERIA,
@@ -73,6 +73,7 @@ class ConsistencyReport(BaseModel):
     worldbuilding: list[ConsistencyError]
     raw: dict[str, list[dict]]  # 19 子类型 → 官方格式错误对象（含 narrative_style 3 类）
     total: int
+    failed_categories: list[str] = Field(default_factory=list)
 
 
 def _to_error(subtype: str, e: dict) -> ConsistencyError:
@@ -149,6 +150,7 @@ class ConStoryCheckerAdapter:
 
     async def check_consistency(self, narrative: str) -> ConsistencyReport:
         raw: dict[str, list[dict]] = {full: [] for full in _ALL_SUBTYPES}
+        failed_categories: list[str] = []
 
         tasks = {
             cat: self._evaluate_category(self._templates[cat], narrative, cat)
@@ -158,7 +160,8 @@ class ConStoryCheckerAdapter:
         for cat, resp in zip(tasks, gathered):
             cfg = EVALUATION_CRITERIA[cat]
             if isinstance(resp, Exception):
-                # 该类评估失败 → 子类型记空列表（降级，不抛异常）
+                # 保留空列表供诊断，但显式标记失败，不能等价于零矛盾。
+                failed_categories.append(cat)
                 continue
             content = resp or ""
             parsed = parse_criteria_response(content, cfg["sub_criteria"], cat)
@@ -188,4 +191,5 @@ class ConStoryCheckerAdapter:
             worldbuilding=buckets["worldbuilding"],
             raw=raw,
             total=total,
+            failed_categories=failed_categories,
         )

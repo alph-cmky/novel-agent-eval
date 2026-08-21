@@ -92,6 +92,7 @@ _RUBRIC_TABLE = [
 class JudgeScore(BaseModel):
     dimensions: dict[str, int]   # 8 质量维，各 0-100
     overall: int
+    valid: bool = True            # 解析失败/维度不完整时为 False，分数仅作诊断兜底
 
 
 def _build_judge_prompt(draft: str, case: EvalCase) -> str:
@@ -306,8 +307,10 @@ class Judge:
             data = _parse_judge_json(content)
             if data is not None and _has_full_dims(data):
                 return self._to_score(data)
-        # 重试耗尽：缺失维度 0 分兜底（data 为 None 时整体 0 分）
-        return self._to_score(data)
+        # 重试耗尽不能伪装成一次正常的低分评测。
+        score = self._to_score(data)
+        score.valid = False
+        return score
 
     @staticmethod
     def _median_scores(samples: list[JudgeScore]) -> JudgeScore:
@@ -319,4 +322,4 @@ class Judge:
 
         dims = {d: _med([s.dimensions[d] for s in samples]) for d in QUALITY_DIMS}
         overall = _med([s.overall for s in samples])
-        return JudgeScore(dimensions=dims, overall=overall)
+        return JudgeScore(dimensions=dims, overall=overall, valid=all(s.valid for s in samples))

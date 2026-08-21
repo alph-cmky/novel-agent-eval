@@ -198,6 +198,17 @@ def test_no_consistency_checker_leaves_consistency_and_meta_untouched():
     assert "consistency_constory" not in run.meta
 
 
+def test_invalid_judge_score_cannot_become_normal_high_score():
+    agent = FakeAgent("a", meta=_meta())
+    invalid = JudgeScore(dimensions={d: 95 for d in QUALITY_DIMS}, overall=95, valid=False)
+
+    run = _run(BenchmarkRunner(FakeJudge(invalid)).run_case(agent, _case(), repeat=1)).runs[0]
+
+    assert run.meta["judge_valid"] is False
+    assert all(run.dimensions[d] == 0 for d in QUALITY_DIMS)
+    assert run.overall < 10
+
+
 # ── run_suite：agent × case 全遍历 ──────────────────────
 
 

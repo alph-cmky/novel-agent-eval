@@ -23,7 +23,8 @@ from typing import Any
 
 from novel_agent_eval.agents.novel_agent import NovelAgentAdapter
 from novel_agent_eval.constory import consistency_score
-from novel_agent_eval.judge import Judge, JudgeScore
+from novel_agent_eval.ground_truth import ground_truth_metrics
+from novel_agent_eval.judge import QUALITY_DIMS, Judge, JudgeScore
 from novel_agent_eval.metrics import efficiency_score, weighted_score
 
 EFFICIENCY_DIM = "efficiency"
@@ -231,18 +232,24 @@ class BenchmarkRunner:
         )
         dims = {**js.dimensions, EFFICIENCY_DIM: eff}
         meta = dict(gen.meta)
+        meta["ground_truth"] = ground_truth_metrics(gen.content, case.ground_truth)
+        meta["judge_valid"] = js.valid
+        if not js.valid:
+            # Judge 失败的诊断分不参与正常评测，避免部分/兜底分抬高总分。
+            dims.update({d: 0 for d in QUALITY_DIMS})
         if self._consistency_checker is not None:
             report = await self._consistency_checker.check_consistency(gen.content)
             con_score = consistency_score(report.total)
             meta["consistency_judge"] = js.dimensions["consistency"]
             meta["consistency_constory"] = con_score
             meta["consistency_errors"] = report.total
+            meta["consistency_failed_categories"] = report.failed_categories
             meta["consistency_breakdown"] = {
                 "character": len(report.character),
                 "timeline": len(report.timeline),
                 "worldbuilding": len(report.worldbuilding),
             }
-            dims["consistency"] = con_score
+            dims["consistency"] = 0 if report.failed_categories else con_score
         overall = weighted_score(dims, case.stage)
         return CaseRun(
             run_index=run_index,

@@ -112,7 +112,7 @@ async def main() -> None:
     n_prompts = int(os.environ.get("N_PROMPTS", "12"))
     repeat = int(os.environ.get("REPEAT", "2"))
     n_samples = int(os.environ.get("JUDGE_N_SAMPLES", "1"))
-    concurrency = int(os.environ.get("CONCURRENCY", "2"))
+    concurrency = int(os.environ.get("CONCURRENCY", "4"))
     story_timeout = float(os.environ.get("STORY_TIMEOUT", "1200"))
     novel_max_rounds = int(os.environ.get("NOVEL_MAX_ROUNDS", "2"))
     novel_skip_orchestrator = os.environ.get("NOVEL_SKIP_ORCHESTRATOR", "1") == "1"

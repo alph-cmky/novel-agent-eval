@@ -53,7 +53,7 @@ os.environ["BASELINE_MODEL"] = "step-3.7-flash"
 
 from novel_agent_eval.agents.novel_agent import NovelAgentAdapter
 from novel_agent_eval.agents.vanilla_llm import VanillaLLMAdapter
-from novel_agent_eval.eqbench_bridge import EQBenchBridge
+from novel_agent_eval.eqbench_bridge import EQBenchBridge, LongformPlan
 from novel_agent_eval.eqbench_judge import EQBenchJudge
 from novel_agent_eval.longform import render_longform_table, run_longform
 from novel_agent_eval.manifest import build_run_manifest
@@ -115,6 +115,7 @@ async def main() -> None:
     concurrency = int(os.environ.get("CONCURRENCY", "4"))
     story_timeout = float(os.environ.get("STORY_TIMEOUT", "1200"))
     bridge_timeout = float(os.environ.get("BRIDGE_TIMEOUT", "300"))
+    skip_bridge = os.environ.get("SKIP_BRIDGE", "0") == "1"
     novel_max_rounds = int(os.environ.get("NOVEL_MAX_ROUNDS", "2"))
     novel_skip_orchestrator = os.environ.get("NOVEL_SKIP_ORCHESTRATOR", "1") == "1"
     novel_skip_reviews = os.environ.get("NOVEL_SKIP_REVIEWS", "0") == "1"
@@ -161,6 +162,7 @@ async def main() -> None:
         "judge_n_samples": n_samples,
         "story_timeout": story_timeout,
         "bridge_timeout": bridge_timeout,
+        "skip_bridge": skip_bridge,
         "novel_max_rounds": novel_max_rounds,
         "novel_skip_orchestrator": novel_skip_orchestrator,
         "novel_skip_reviews": novel_skip_reviews,
@@ -207,15 +209,29 @@ async def main() -> None:
         title = prompt["title"]
         # 同一 prompt 的 plan 只跑一次 bridge，两个 agent 共享（省一半 planning 调用）
         try:
-            plan = await asyncio.wait_for(
-                bridge.plan(
-                    writing_prompt,
+            if skip_bridge:
+                plan = LongformPlan(
                     prompt_id=str(pid),
                     title=title,
                     category=prompt["category"],
-                ),
-                timeout=bridge_timeout,
-            )
+                    writing_prompt=writing_prompt,
+                    n_chapters=8,
+                    final_plan=(
+                        "Write an eight-chapter continuous story. Preserve the prompt's "
+                        "central premise and carry consequences forward between chapters."
+                    ),
+                    character_profiles="Infer and keep character identities consistent.",
+                )
+            else:
+                plan = await asyncio.wait_for(
+                    bridge.plan(
+                        writing_prompt,
+                        prompt_id=str(pid),
+                        title=title,
+                        category=prompt["category"],
+                    ),
+                    timeout=bridge_timeout,
+                )
         except Exception as e:  # noqa: BLE001 — planning 失败不中断其它 prompt
             failures.append(
                 {

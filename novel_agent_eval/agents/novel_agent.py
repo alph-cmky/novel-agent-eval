@@ -129,6 +129,7 @@ class NovelAgentAdapter:
             "persist_dir": case.persist_dir or persist_dir,
             "retry_count": 0,
             "scene_first": True,
+            "deterministic_gate_first": True,
         }
         if self.max_rounds is not None:
             state["evolution_max_rounds"] = self.max_rounds

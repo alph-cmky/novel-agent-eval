@@ -55,6 +55,14 @@ class _FakeJudge:
         return dict(self._scores)
 
 
+class _SlowAgent:
+    name = "slow_agent"
+
+    async def generate(self, case):
+        await asyncio.sleep(0.05)
+        return GeneratedChapter(content="late", meta={})
+
+
 def _plan(n_chapters=8) -> LongformPlan:
     return LongformPlan(
         prompt_id="1",
@@ -66,6 +74,18 @@ def _plan(n_chapters=8) -> LongformPlan:
         character_profiles="# Hero\nProfile",
         step_outputs={},
     )
+
+
+def test_run_longform_reports_generation_timeout_stage():
+    with pytest.raises(TimeoutError, match="chapter=1 stage=generation"):
+        asyncio.run(
+            run_longform(
+                agent=_SlowAgent(),
+                judge=_FakeJudge(_full_scores()),
+                plan=_plan(1),
+                chapter_timeout=0.001,
+            )
+        )
 
 
 # 全部 14 维打满 20（负向维 0 → 反转后 20），单章分恒为 ~20

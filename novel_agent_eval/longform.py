@@ -178,6 +178,7 @@ async def run_longform(
     max_story_outline_chars: int | None = None,
     artifact_dir=None,
     resume: bool = False,
+    chapter_timeout: float | None = None,
 ) -> LongformResult:
     """跑一条 prompt 的 8 章连载并逐章评分，聚合 0-100 + degradation。"""
     cases = plan_to_cases(
@@ -205,8 +206,17 @@ async def run_longform(
             gen = None
             for attempt in range(5):
                 try:
-                    gen = await agent.generate(case)
+                    generation = agent.generate(case)
+                    gen = await (
+                        asyncio.wait_for(generation, timeout=chapter_timeout)
+                        if chapter_timeout else generation
+                    )
                     break
+                except TimeoutError as exc:
+                    raise TimeoutError(
+                        f"chapter={i} stage=generation "
+                        f"timeout_seconds={chapter_timeout}"
+                    ) from exc
                 except Exception as e:
                     if _retryable_error(e):
                         await asyncio.sleep(3.0 * (attempt + 1))
@@ -224,14 +234,22 @@ async def run_longform(
             scores = None
             for attempt in range(5):
                 try:
-                    scores = await judge.score_chapter(
+                    judging = judge.score_chapter(
                         writing_prompt=plan.writing_prompt,
                         final_plan=plan.final_plan,
                         character_profiles=plan.character_profiles,
                         chapter_number=i,
                         chapter_text=gen.content,
                     )
+                    scores = await (
+                        asyncio.wait_for(judging, timeout=chapter_timeout)
+                        if chapter_timeout else judging
+                    )
                     break
+                except TimeoutError as exc:
+                    raise TimeoutError(
+                        f"chapter={i} stage=judge timeout_seconds={chapter_timeout}"
+                    ) from exc
                 except Exception as e:
                     if _retryable_error(e):
                         await asyncio.sleep(3.0 * (attempt + 1))

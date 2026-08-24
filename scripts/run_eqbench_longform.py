@@ -115,6 +115,7 @@ async def main() -> None:
     n_samples = int(os.environ.get("JUDGE_N_SAMPLES", "1"))
     concurrency = int(os.environ.get("CONCURRENCY", "4"))
     story_timeout = float(os.environ.get("STORY_TIMEOUT", "1200"))
+    chapter_timeout = float(os.environ.get("CHAPTER_TIMEOUT", "600"))
     bridge_timeout = float(os.environ.get("BRIDGE_TIMEOUT", "300"))
     skip_bridge = os.environ.get("SKIP_BRIDGE", "0") == "1"
     n_chapters = int(os.environ.get("N_CHAPTERS", "8"))
@@ -164,6 +165,7 @@ async def main() -> None:
         "concurrency": concurrency,
         "judge_n_samples": n_samples,
         "story_timeout": story_timeout,
+        "chapter_timeout": chapter_timeout,
         "bridge_timeout": bridge_timeout,
         "skip_bridge": skip_bridge,
         "n_chapters": n_chapters,
@@ -270,6 +272,7 @@ async def main() -> None:
                                 / str(prompt_id) / f"sample_{sample_index}"
                             ),
                             resume=resume,
+                            chapter_timeout=chapter_timeout,
                         ),
                         timeout=story_timeout,
                     )
@@ -285,7 +288,11 @@ async def main() -> None:
                         "sample_index": sample_index,
                         "error_type": type(e).__name__,
                         "error": error,
-                        "stage": "longform_sample",
+                        "stage": (
+                            "generation" if "stage=generation" in error
+                            else "judge" if "stage=judge" in error
+                            else "longform_sample"
+                        ),
                         "expected_chapters": n_chapters,
                     }
                     print(

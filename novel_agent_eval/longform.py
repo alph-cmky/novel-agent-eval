@@ -21,6 +21,17 @@ from novel_agent_eval.eqbench_bridge import LongformPlan, plan_to_cases
 from novel_agent_eval.eqbench_judge import EQBenchJudge, eqbench_chapter_score
 
 
+def save_chapter_text(path, content: str) -> None:
+    """Persist one chapter atomically so partial runs retain completed text."""
+    from pathlib import Path
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(target)
+
+
 def _retryable_error(error: Exception) -> bool:
     message = str(error).lower()
     return any(
@@ -115,6 +126,7 @@ async def run_longform(
     degradation_window: int = 2,
     sample_index: int = 0,
     max_story_outline_chars: int | None = None,
+    artifact_dir=None,
 ) -> LongformResult:
     """跑一条 prompt 的 8 章连载并逐章评分，聚合 0-100 + degradation。"""
     cases = plan_to_cases(
@@ -172,6 +184,14 @@ async def run_longform(
             chapter_meta["target_word_count"] = case.word_target
             chapter_meta["memory_project_id"] = story_project_id
             chapter_meta["memory_persist_dir"] = story_persist_dir
+            if artifact_dir is not None:
+                from pathlib import Path
+
+                content_path = (
+                    Path(artifact_dir) / f"chapter_{i:02d}.txt"
+                )
+                save_chapter_text(content_path, gen.content)
+                chapter_meta["content_path"] = str(content_path)
             chapters.append(
                 ChapterResult(
                     chapter_index=i,

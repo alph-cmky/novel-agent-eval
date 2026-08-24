@@ -90,6 +90,7 @@ def _serialize_result(result) -> dict:
                 "content_length": chapter.content_length,
                 "eqbench_score": chapter.eqbench_score,
                 "meta": chapter.meta,
+                "content_path": chapter.meta.get("content_path"),
             }
             for chapter in result.chapters
         ],
@@ -228,13 +229,17 @@ async def main() -> None:
         async def run_one(agent, sample_index: int, prompt_id: int, prompt_title: str, run_plan):
             async with semaphore:
                 try:
-                    res = await asyncio.wait_for(
+                        res = await asyncio.wait_for(
                         run_longform(
                             agent=agent,
                             judge=judge,
                             plan=run_plan,
                             sample_index=sample_index,
                             max_story_outline_chars=max_story_outline_chars,
+                            artifact_dir=(
+                                out.parent / f"{out.stem}.chapters" / agent.name
+                                / str(prompt_id) / f"sample_{sample_index}"
+                            ),
                         ),
                         timeout=story_timeout,
                     )

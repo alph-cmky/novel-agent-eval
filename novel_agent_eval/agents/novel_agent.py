@@ -71,6 +71,7 @@ class NovelAgentAdapter:
             self.name = label
         # None → 每次 generate 用临时目录；也可显式指定（持久化调试用）
         self._persist_dir = persist_dir
+        self._sessions: dict[tuple[str, str], dict] = {}
 
     @staticmethod
     def _chapter_number(case: EvalCase) -> int:
@@ -144,8 +145,17 @@ class NovelAgentAdapter:
 
     def index_chapter(self, *, project_id: str, persist_dir: str, chapter_number: int, content: str) -> None:
         """Persist generated chapter text for subsequent longform retrieval."""
+        for (session_dir, external_id), session in self._sessions.items():
+            if session_dir == str(Path(persist_dir).resolve()) and external_id == project_id:
+                project_id = session["project_id"]
+                break
         store = ChapterStore(Path(persist_dir) / "chroma_data")
         store.index_chapter(project_id, chapter_number, content)
+
+    def close_session(self, project_id: str, persist_dir: str) -> None:
+        """Release one longform session after its artifacts have been persisted."""
+        key = (str(Path(persist_dir).resolve()), project_id)
+        self._sessions.pop(key, None)
 
     @staticmethod
     def _extract_meta(
@@ -199,19 +209,34 @@ class NovelAgentAdapter:
         snapshot_hash = None
         try:
             if ProjectManager is not None:
-                manager = ProjectManager(Path(persist_dir))
-                project_id = manager.init_project(
-                    name=f"eval:{case.name}",
-                    title=f"eval:{case.name}",
-                    story_length=_STAGE_TO_STORY_LENGTH.get(case.stage, "long"),
-                    target_chapter_words=case.word_target,
-                )
-                run = manager.create_writing_run(
-                    project_id,
-                    self._chapter_number(case),
-                    run_type="evaluation",
-                    workflow_version="v2",
-                )
+                session_key = (str(Path(persist_dir).resolve()), case.project_id or case.name)
+                session = self._sessions.get(session_key)
+                if session is None:
+                    manager = ProjectManager(Path(persist_dir))
+                    project_id = manager.init_project(
+                        name=f"eval:{case.name}",
+                        title=f"eval:{case.name}",
+                        story_length=_STAGE_TO_STORY_LENGTH.get(case.stage, "long"),
+                        target_chapter_words=case.word_target,
+                    )
+                    session = {
+                        "manager": manager,
+                        "project_id": project_id,
+                        "runs": {},
+                    }
+                    self._sessions[session_key] = session
+                manager = session["manager"]
+                project_id = session["project_id"]
+                chapter_number = self._chapter_number(case)
+                run = session["runs"].get(chapter_number)
+                if run is None:
+                    run = manager.create_writing_run(
+                        project_id,
+                        chapter_number,
+                        run_type="evaluation",
+                        workflow_version="v2",
+                    )
+                    session["runs"][chapter_number] = run
                 context_state = ContextCompiler(manager).compile_for_run(run["id"]).to_state()
                 snapshot_hash = manager.get_canon_snapshot(
                     run["input_snapshot_id"]

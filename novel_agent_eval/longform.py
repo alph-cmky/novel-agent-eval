@@ -203,6 +203,8 @@ async def run_longform(
             )
             context += f"\n\n[Chapter {i}]\n{gen.content}"
     finally:
+        if hasattr(agent, "close_session"):
+            agent.close_session(story_project_id, story_persist_dir)
         shutil.rmtree(story_persist_dir, ignore_errors=True)
 
     valid = [c.eqbench_score for c in chapters]

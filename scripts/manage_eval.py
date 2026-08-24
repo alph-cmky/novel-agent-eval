@@ -49,6 +49,7 @@ def start(args: argparse.Namespace) -> int:
         "CONCURRENCY": str(args.concurrency),
         "STORY_TIMEOUT": str(args.story_timeout),
         "EQBENCH_OUT": str(args.output),
+        "RESUME": "1" if args.resume else "0",
     })
     paths["log"].parent.mkdir(parents=True, exist_ok=True)
     log = paths["log"].open("a", encoding="utf-8")
@@ -74,6 +75,7 @@ def start(args: argparse.Namespace) -> int:
             "agents": args.agents,
             "concurrency": args.concurrency,
             "story_timeout": args.story_timeout,
+            "resume": args.resume,
         },
     })
     print(f"started: pid={process.pid}")
@@ -133,6 +135,7 @@ def main() -> int:
     parser.add_argument("--agents", default="novel_agent,vanilla_llm")
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--story-timeout", type=int, default=3600)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     return {"start": start, "status": status, "stop": stop}[args.command](args)
 

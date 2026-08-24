@@ -12,9 +12,11 @@ degradation 为横评自建指标（官方无此定义）：尾段均值 - 首�
 
 import asyncio
 import hashlib
+import json
 import shutil
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from novel_agent_eval.eqbench_bridge import LongformPlan, plan_to_cases
@@ -30,6 +32,54 @@ def save_chapter_text(path, content: str) -> None:
     temporary = target.with_name(f".{target.name}.tmp")
     temporary.write_text(content, encoding="utf-8")
     temporary.replace(target)
+
+
+def _save_chapter_checkpoint(path, chapters: list["ChapterResult"]) -> None:
+    payload = {
+        "completed_chapters": [
+            {
+                "chapter_index": chapter.chapter_index,
+                "scores": chapter.scores,
+                "eqbench_score": chapter.eqbench_score,
+                "content_path": chapter.meta.get("content_path"),
+                "content_length": chapter.content_length,
+                "meta": chapter.meta,
+            }
+            for chapter in chapters
+        ]
+    }
+    target = path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    temporary.replace(target)
+
+
+def _load_chapter_checkpoint(path) -> list["ChapterResult"]:
+    target = Path(path)
+    if not target.exists():
+        return []
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    chapters = []
+    for item in payload.get("completed_chapters", []):
+        content_path = item.get("content_path")
+        if not content_path:
+            continue
+        try:
+            content = Path(content_path).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        chapters.append(ChapterResult(
+            chapter_index=item["chapter_index"],
+            scores=item.get("scores", {}),
+            eqbench_score=item.get("eqbench_score"),
+            content=content,
+            meta=item.get("meta", {}),
+        ))
+    return chapters
 
 
 def _retryable_error(error: Exception) -> bool:
@@ -127,6 +177,7 @@ async def run_longform(
     sample_index: int = 0,
     max_story_outline_chars: int | None = None,
     artifact_dir=None,
+    resume: bool = False,
 ) -> LongformResult:
     """跑一条 prompt 的 8 章连载并逐章评分，聚合 0-100 + degradation。"""
     cases = plan_to_cases(
@@ -134,12 +185,20 @@ async def run_longform(
         word_target=word_target,
         max_story_outline_chars=max_story_outline_chars,
     )
-    chapters: list[ChapterResult] = []
-    context = ""
+    chapters: list[ChapterResult] = (
+        _load_chapter_checkpoint(Path(artifact_dir) / "checkpoint.json")
+        if resume and artifact_dir is not None else []
+    )
+    context = "".join(
+        f"\n\n[Chapter {chapter.chapter_index}]\n{chapter.content}"
+        for chapter in chapters
+    )
     story_persist_dir = tempfile.mkdtemp(prefix="novel_longform_")
     story_project_id = f"longform_{plan.prompt_id}_{sample_index}_{agent.name}"
     try:
         for i, case in enumerate(cases, start=1):
+            if i <= len(chapters):
+                continue
             case.previous_context = context
             case.project_id = story_project_id
             case.persist_dir = story_persist_dir
@@ -185,8 +244,6 @@ async def run_longform(
             chapter_meta["memory_project_id"] = story_project_id
             chapter_meta["memory_persist_dir"] = story_persist_dir
             if artifact_dir is not None:
-                from pathlib import Path
-
                 content_path = (
                     Path(artifact_dir) / f"chapter_{i:02d}.txt"
                 )
@@ -201,6 +258,8 @@ async def run_longform(
                     meta=chapter_meta,
                 )
             )
+            if artifact_dir is not None:
+                _save_chapter_checkpoint(Path(artifact_dir) / "checkpoint.json", chapters)
             context += f"\n\n[Chapter {i}]\n{gen.content}"
     finally:
         if hasattr(agent, "close_session"):

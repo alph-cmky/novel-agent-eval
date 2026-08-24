@@ -118,6 +118,7 @@ async def main() -> None:
     bridge_timeout = float(os.environ.get("BRIDGE_TIMEOUT", "300"))
     skip_bridge = os.environ.get("SKIP_BRIDGE", "0") == "1"
     n_chapters = int(os.environ.get("N_CHAPTERS", "8"))
+    resume = os.environ.get("RESUME", "0") == "1"
     novel_max_rounds = int(os.environ.get("NOVEL_MAX_ROUNDS", "2"))
     novel_skip_orchestrator = os.environ.get("NOVEL_SKIP_ORCHESTRATOR", "1") == "1"
     novel_skip_reviews = os.environ.get("NOVEL_SKIP_REVIEWS", "0") == "1"
@@ -166,6 +167,7 @@ async def main() -> None:
         "bridge_timeout": bridge_timeout,
         "skip_bridge": skip_bridge,
         "n_chapters": n_chapters,
+        "resume": resume,
         "novel_max_rounds": novel_max_rounds,
         "novel_skip_orchestrator": novel_skip_orchestrator,
         "novel_skip_reviews": novel_skip_reviews,
@@ -267,6 +269,7 @@ async def main() -> None:
                                 out.parent / f"{out.stem}.chapters" / agent.name
                                 / str(prompt_id) / f"sample_{sample_index}"
                             ),
+                            resume=resume,
                         ),
                         timeout=story_timeout,
                     )

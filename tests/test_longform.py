@@ -7,10 +7,31 @@ import pytest
 from novel_agent_eval.agents.base import GeneratedChapter
 from novel_agent_eval.eqbench_bridge import LongformPlan
 from novel_agent_eval.longform import (
+    ChapterResult,
+    _load_chapter_checkpoint,
+    _save_chapter_checkpoint,
     degradation_score,
     render_longform_table,
     run_longform,
 )
+
+
+def test_chapter_checkpoint_round_trip(tmp_path):
+    chapter = ChapterResult(
+        chapter_index=1,
+        scores={"Coherent": 18},
+        eqbench_score=17.5,
+        content="完整正文",
+        meta={"content_path": str(tmp_path / "chapter_01.txt")},
+    )
+    (tmp_path / "chapter_01.txt").write_text(chapter.content, encoding="utf-8")
+    checkpoint = tmp_path / "checkpoint.json"
+
+    _save_chapter_checkpoint(checkpoint, [chapter])
+    restored = _load_chapter_checkpoint(checkpoint)
+
+    assert restored[0].content == "完整正文"
+    assert restored[0].eqbench_score == 17.5
 
 
 class _FakeAgent:

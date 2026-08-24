@@ -22,6 +22,15 @@ from langgraph.types import Command
 from novel_agent.graph.chapter import build_chapter_graph_async
 from novel_agent.memory.embeddings import ChapterStore
 
+try:
+    from novel_agent.api.run_service import ChapterRunService
+    from novel_agent.context import ContextCompiler
+    from novel_agent.storage.manager import ProjectManager
+except ModuleNotFoundError:  # pragma: no cover - old released novel-agent fallback
+    ChapterRunService = None
+    ContextCompiler = None
+    ProjectManager = None
+
 from novel_agent_eval.agents.base import GeneratedChapter
 from novel_agent_eval.dataset.schema import EvalCase
 
@@ -118,6 +127,7 @@ class NovelAgentAdapter:
             "existing_world_entities": [],
             "persist_dir": case.persist_dir or persist_dir,
             "retry_count": 0,
+            "scene_first": True,
         }
         if self.max_rounds is not None:
             state["evolution_max_rounds"] = self.max_rounds
@@ -156,12 +166,21 @@ class NovelAgentAdapter:
             "evolution_history": history,
             "evolution_termination": values.get("evolution_termination", ""),
             "quality_guard_report": values.get("quality_guard_report", {}),
-            "evolution_best_quality_guard": values.get("evolution_best_quality_guard", {}),
-            "evolution_best_version": values.get("evolution_best_version"),
+            "evolution_candidates": values.get("evolution_candidates", []),
+            "evolution_best_candidate_version": values.get(
+                "evolution_best_candidate_version"
+            ),
+            "evolution_best_version": values.get(
+                "evolution_best_candidate_version",
+                values.get("evolution_best_version"),
+            ),
             "editor_overall": (values.get("editor_report") or {}).get("overall_score"),
             "continuity_overall": (values.get("continuity_report") or {}).get("overall_score"),
             "human_approved": values.get("human_approved"),
             "elapsed_seconds": round(elapsed, 3),
+            "workflow_version": "v2",
+            "context_packet_hash": values.get("context_packet_hash"),
+            "writing_run_id": values.get("writing_run_id"),
             # 主仓库 NovelState 无 token 计数字段（writer latest_trace 不落 state）
             "tokens": None,
         }
@@ -175,14 +194,41 @@ class NovelAgentAdapter:
 
         graph = None
         final_state = None
+        manager = None
+        run = None
+        snapshot_hash = None
         try:
+            if ProjectManager is not None:
+                manager = ProjectManager(Path(persist_dir))
+                project_id = manager.init_project(
+                    name=f"eval:{case.name}",
+                    title=f"eval:{case.name}",
+                    story_length=_STAGE_TO_STORY_LENGTH.get(case.stage, "long"),
+                    target_chapter_words=case.word_target,
+                )
+                run = manager.create_writing_run(
+                    project_id,
+                    self._chapter_number(case),
+                    run_type="evaluation",
+                    workflow_version="v2",
+                )
+                context_state = ContextCompiler(manager).compile_for_run(run["id"]).to_state()
+                snapshot_hash = manager.get_canon_snapshot(
+                    run["input_snapshot_id"]
+                )["content_hash"]
+            else:
+                context_state = {}
             graph = await build_chapter_graph_async(
                 persist_dir=persist_dir,
             )
             initial_state = self._map_initial_state(case, persist_dir)
+            initial_state.update(context_state)
+            if run:
+                initial_state["project_id"] = project_id
+                initial_state["writing_run_id"] = run["id"]
             config = {
                 "configurable": {
-                    "thread_id": f"eval:{case.name}:{self._chapter_number(case)}",
+                    "thread_id": run["id"] if run else f"eval:{case.name}:{self._chapter_number(case)}",
                 }
             }
 
@@ -222,9 +268,40 @@ class NovelAgentAdapter:
 
         values = final_state.values if final_state else {}
         content = (values.get("draft_content") or "").strip()
+        if manager and run and content and ChapterRunService is not None:
+            service = ChapterRunService(manager)
+            version = service.attach_candidate(
+                run["id"],
+                content,
+                origin="evaluation",
+                scene_plan=values.get("scene_plan", []),
+                scene_drafts=values.get("scene_drafts", []),
+            )
+            worldbuilding = values.get("worldbuilding_report") or {}
+            if worldbuilding:
+                manager.create_canon_proposal(
+                    project_id,
+                    run["chapter_number"],
+                    "worldbuilding",
+                    worldbuilding,
+                    run_id=run["id"],
+                    version_id=version["id"],
+                )
+            for proposal in manager.list_canon_proposals(
+                project_id, run_id=run["id"], status="proposed"
+            ):
+                manager.review_canon_proposal(proposal["id"], "accepted", "evaluation approval")
+            service.commit(run["id"])
+        meta = self._extract_meta(values, elapsed)
+        if run:
+            meta.update({
+                "writing_run_id": run["id"],
+                "project_id": run["project_id"],
+                "context_snapshot_hash": snapshot_hash,
+            })
         return GeneratedChapter(
             content=content,
-            meta=self._extract_meta(values, elapsed),
+            meta=meta,
         )
 
 

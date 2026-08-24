@@ -130,11 +130,17 @@ class ConStoryCheckerAdapter:
         self._model = model or os.environ.get("STEPFUN_JUDGE_MODEL", _DEFAULT_JUDGE_MODEL)
         self._templates = load_prompt_templates(str(prompts_dir or _VENDOR_PROMPTS_DIR))
 
-    async def _evaluate_category(self, template: str, narrative: str, cat: str) -> str:
+    async def _evaluate_category(
+        self, template: str, narrative: str, cat: str, reference: str = ""
+    ) -> str:
         """对单个类别发起一次评估，返回原始 content（失败时 raise，由上层降级）。"""
         prompt = template.replace("{{ Content }}", narrative).replace(
             "{{ Query }}", f"{EVALUATION_CRITERIA[cat]['name']} Analysis"
         )
+        if reference:
+            prompt = prompt.replace("{{ Reference }}", reference)
+            if "{{ Reference }}" not in template:
+                prompt += f"\n\n## Reference facts (do not invent facts)\n{reference}"
         system, user = _split_chatml(prompt)
         resp = await self._client.chat.completions.create(
             model=self._model,
@@ -148,12 +154,21 @@ class ConStoryCheckerAdapter:
         )
         return resp.choices[0].message.content or ""
 
-    async def check_consistency(self, narrative: str) -> ConsistencyReport:
+    async def check_consistency(
+        self, narrative: str, reference: dict | str | None = None
+    ) -> ConsistencyReport:
+        """Check narrative against optional reference facts and context."""
         raw: dict[str, list[dict]] = {full: [] for full in _ALL_SUBTYPES}
         failed_categories: list[str] = []
+        if isinstance(reference, dict):
+            reference_text = json.dumps(reference, ensure_ascii=False, indent=2)
+        else:
+            reference_text = reference or ""
 
         tasks = {
-            cat: self._evaluate_category(self._templates[cat], narrative, cat)
+            cat: self._evaluate_category(
+                self._templates[cat], narrative, cat, reference_text
+            )
             for cat in EVALUATION_CRITERIA
         }
         gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)

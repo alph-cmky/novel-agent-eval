@@ -238,7 +238,20 @@ class BenchmarkRunner:
             # Judge 失败的诊断分不参与正常评测，避免部分/兜底分抬高总分。
             dims.update({d: 0 for d in QUALITY_DIMS})
         if self._consistency_checker is not None:
-            report = await self._consistency_checker.check_consistency(gen.content)
+            reference = {
+                "ground_truth": case.ground_truth,
+                "story_outline": case.story_outline,
+                "chapter_outline": case.target_chapter_outline,
+                "previous_context": case.previous_context,
+            }
+            try:
+                report = await self._consistency_checker.check_consistency(
+                    gen.content, reference=reference
+                )
+            except TypeError as exc:
+                if "reference" not in str(exc):
+                    raise
+                report = await self._consistency_checker.check_consistency(gen.content)
             con_score = consistency_score(report.total)
             meta["consistency_judge"] = js.dimensions["consistency"]
             meta["consistency_constory"] = con_score
@@ -249,6 +262,7 @@ class BenchmarkRunner:
                 "timeline": len(report.timeline),
                 "worldbuilding": len(report.worldbuilding),
             }
+            meta["consistency_reference"] = reference
             dims["consistency"] = 0 if report.failed_categories else con_score
         overall = weighted_score(dims, case.stage)
         return CaseRun(

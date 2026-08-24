@@ -27,7 +27,7 @@ build-backend = "uv_build"
 module-root = ""
 
 [tool.uv.sources]
-novel-agent = { git = "https://github.com/alph-cmky/novel-agent.git" }
+novel-agent = { path = "../novel-agent", editable = true }
 
 [tool.pytest.ini_options]
 addopts = "-m 'not slow'"

@@ -114,6 +114,7 @@ async def main() -> None:
     n_samples = int(os.environ.get("JUDGE_N_SAMPLES", "1"))
     concurrency = int(os.environ.get("CONCURRENCY", "4"))
     story_timeout = float(os.environ.get("STORY_TIMEOUT", "1200"))
+    bridge_timeout = float(os.environ.get("BRIDGE_TIMEOUT", "300"))
     novel_max_rounds = int(os.environ.get("NOVEL_MAX_ROUNDS", "2"))
     novel_skip_orchestrator = os.environ.get("NOVEL_SKIP_ORCHESTRATOR", "1") == "1"
     novel_skip_reviews = os.environ.get("NOVEL_SKIP_REVIEWS", "0") == "1"
@@ -159,6 +160,7 @@ async def main() -> None:
         "concurrency": concurrency,
         "judge_n_samples": n_samples,
         "story_timeout": story_timeout,
+        "bridge_timeout": bridge_timeout,
         "novel_max_rounds": novel_max_rounds,
         "novel_skip_orchestrator": novel_skip_orchestrator,
         "novel_skip_reviews": novel_skip_reviews,
@@ -205,8 +207,14 @@ async def main() -> None:
         title = prompt["title"]
         # 同一 prompt 的 plan 只跑一次 bridge，两个 agent 共享（省一半 planning 调用）
         try:
-            plan = await bridge.plan(
-                writing_prompt, prompt_id=str(pid), title=title, category=prompt["category"]
+            plan = await asyncio.wait_for(
+                bridge.plan(
+                    writing_prompt,
+                    prompt_id=str(pid),
+                    title=title,
+                    category=prompt["category"],
+                ),
+                timeout=bridge_timeout,
             )
         except Exception as e:  # noqa: BLE001 — planning 失败不中断其它 prompt
             failures.append(

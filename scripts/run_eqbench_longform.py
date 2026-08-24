@@ -82,6 +82,7 @@ def _serialize_result(result) -> dict:
         "middle_window_score": result.middle_window_score,
         "last_window_score": result.last_window_score,
         "trend_slope": result.trend_slope,
+        "task_success": result.completion_rate == 1.0 and result.eqbench_0_100 is not None,
         "chapter_scores": result.chapter_scores,
         "chapters": [
             {
@@ -116,6 +117,7 @@ async def main() -> None:
     story_timeout = float(os.environ.get("STORY_TIMEOUT", "1200"))
     bridge_timeout = float(os.environ.get("BRIDGE_TIMEOUT", "300"))
     skip_bridge = os.environ.get("SKIP_BRIDGE", "0") == "1"
+    n_chapters = int(os.environ.get("N_CHAPTERS", "8"))
     novel_max_rounds = int(os.environ.get("NOVEL_MAX_ROUNDS", "2"))
     novel_skip_orchestrator = os.environ.get("NOVEL_SKIP_ORCHESTRATOR", "1") == "1"
     novel_skip_reviews = os.environ.get("NOVEL_SKIP_REVIEWS", "0") == "1"
@@ -132,7 +134,7 @@ async def main() -> None:
     else:
         prompts = list(enumerate(all_prompts, start=1))
 
-    bridge = EQBenchBridge()
+    bridge = EQBenchBridge(n_chapters=n_chapters)
     judge = EQBenchJudge(n_samples=n_samples)
     selected_agents = {
         "novel_agent": NovelAgentAdapter(
@@ -163,6 +165,7 @@ async def main() -> None:
         "story_timeout": story_timeout,
         "bridge_timeout": bridge_timeout,
         "skip_bridge": skip_bridge,
+        "n_chapters": n_chapters,
         "novel_max_rounds": novel_max_rounds,
         "novel_skip_orchestrator": novel_skip_orchestrator,
         "novel_skip_reviews": novel_skip_reviews,
@@ -215,7 +218,7 @@ async def main() -> None:
                     title=title,
                     category=prompt["category"],
                     writing_prompt=writing_prompt,
-                    n_chapters=8,
+                    n_chapters=n_chapters,
                     final_plan=(
                         "Write an eight-chapter continuous story. Preserve the prompt's "
                         "central premise and carry consequences forward between chapters."
@@ -268,12 +271,19 @@ async def main() -> None:
                         timeout=story_timeout,
                     )
                 except Exception as e:  # noqa: BLE001 — 单样本崩溃不中断整体横评
+                    error = str(e) or (
+                        f"story_timeout_seconds={story_timeout}"
+                        if isinstance(e, TimeoutError)
+                        else repr(e)
+                    )
                     failure = {
                         "agent": agent.name,
                         "prompt_id": str(prompt_id),
                         "sample_index": sample_index,
                         "error_type": type(e).__name__,
-                        "error": str(e),
+                        "error": error,
+                        "stage": "longform_sample",
+                        "expected_chapters": n_chapters,
                     }
                     print(
                         f"[{agent.name}] {prompt_title} sample={sample_index} FAILED: "
@@ -326,8 +336,19 @@ async def main() -> None:
         degradations = [r.degradation for r in valid_results if r.degradation is not None]
         summary[agent_name] = {
             "samples": len(agent_results),
+            "expected_samples": len(prompts) * repeat,
             "valid_samples": len(valid_results),
             "invalid_samples": len(agent_results) - len(valid_results),
+            "failed_samples": sum(
+                1 for failure in failures if failure.get("agent") == agent_name
+            ),
+            "sample_success_rate": round(
+                len(valid_results) / (len(prompts) * repeat), 3
+            ) if prompts and repeat else 0.0,
+            "chapter_completion_rate": round(
+                sum(r.completion_rate for r in valid_results)
+                / (len(prompts) * repeat), 3
+            ) if prompts and repeat else 0.0,
             "mean_score": round(fmean(scores), 3) if scores else None,
             "score_std": round(pstdev(scores), 3) if len(scores) > 1 else None,
             "mean_degradation": round(fmean(degradations), 3) if degradations else None,

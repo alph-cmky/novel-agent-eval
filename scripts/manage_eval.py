@@ -100,8 +100,14 @@ def status(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "not_started"}, ensure_ascii=False))
         return 0
     payload = json.loads(paths["status"].read_text())
-    if payload.get("status") in {"running", "stopping"} and not _alive(payload.get("pid")):
-        payload["status"] = "stopped" if payload["status"] == "stopping" else "orphaned"
+    if payload.get("status") in {"running", "stopping", "orphaned"} and not _alive(payload.get("pid")):
+        output = Path(payload.get("output", ""))
+        if payload["status"] == "stopping":
+            payload["status"] = "stopped"
+        elif output.exists():
+            payload["status"] = "completed"
+        else:
+            payload["status"] = "orphaned"
         payload["ended_at"] = _now()
         _write_json(paths["status"], payload)
     print(json.dumps(payload, ensure_ascii=False, indent=2))

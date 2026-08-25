@@ -53,7 +53,35 @@ def _progress(output: Path) -> dict:
     return result
 
 
+_PRESETS = {
+    "smoke8": {
+        "prompts": 1, "repeat": 1, "chapters": 8,
+        "agents": "novel_agent", "max_rounds": 0,
+    },
+    "longform20": {
+        "prompts": 2, "repeat": 1, "chapters": 20,
+        "agents": "novel_agent,vanilla_llm", "max_rounds": 0,
+    },
+    "prompt_v2_20": {
+        "prompts": 2, "repeat": 1, "chapters": 20,
+        "agents": "novel_agent", "max_rounds": 0,
+        "prompt_profile": "v2",
+    },
+    "consistency30": {
+        "prompts": 6, "repeat": 3, "chapters": 30,
+        "agents": "novel_agent,vanilla_llm", "max_rounds": 0,
+    },
+    "holdout50": {
+        "prompts": 10, "repeat": 3, "chapters": 50,
+        "agents": "novel_agent,vanilla_llm", "max_rounds": 1,
+    },
+}
+
+
 def start(args: argparse.Namespace) -> int:
+    preset = _PRESETS.get(args.preset, {})
+    for key, value in preset.items():
+        setattr(args, key, value)
     paths = _paths(args.output)
     if paths["status"].exists():
         current = json.loads(paths["status"].read_text())
@@ -117,6 +145,7 @@ def start(args: argparse.Namespace) -> int:
             "skip_bridge": args.skip_bridge,
             "max_rounds": args.max_rounds,
             "chapter_timeout": args.chapter_timeout,
+            "preset": args.preset,
         },
     })
     print(f"started: pid={process.pid}")
@@ -203,6 +232,7 @@ def main() -> int:
     parser.add_argument("--skip-enrichment", action="store_true", default=True)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--compact", action="store_true")
+    parser.add_argument("--preset", choices=tuple(_PRESETS), default=None)
     args = parser.parse_args()
     return {"start": start, "status": status, "stop": stop}[args.command](args)
 

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from scripts.manage_eval import _paths, _progress, _write_json
+from scripts.manage_eval import _PRESETS, _paths, _progress, _write_json
 
 
 def test_status_paths_are_next_to_output(tmp_path):
@@ -37,4 +37,15 @@ def test_progress_reports_results_failures_and_saved_chapters(tmp_path):
         "completed_samples": 2,
         "failures": 1,
         "chapters_saved": 1,
+    }
+
+
+def test_presets_keep_longform_protocols_explicit():
+    assert _PRESETS["prompt_v2_20"] == {
+        "prompts": 2,
+        "repeat": 1,
+        "chapters": 20,
+        "agents": "novel_agent",
+        "max_rounds": 0,
+        "prompt_profile": "v2",
     }

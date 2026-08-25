@@ -70,16 +70,18 @@ uv run python scripts/run_horizontal_eval.py \
   --out /tmp/horizontal_eval.json
 ```
 
-EQ-Bench Longform 需要独立的 bridge/judge 配置：
+EQ-Bench Longform 建议通过统一后台入口运行：
 
 ```bash
 DEEPSEEK_API_KEY=... STEPFUN_API_KEY=... \
-CONCURRENCY=4 \
-uv run python scripts/run_eqbench_longform.py
+uv run python scripts/manage_eval.py start \
+  --preset longform20 \
+  --output /tmp/longform20.json \
+  --concurrency 4
 ```
 
-`CONCURRENCY` 控制最多几条 story chain 并行（默认 1），每条 story 内部章节仍然串行。
-结果增量写入进度文件，中断后已完成的章节不会丢失。
+`manage_eval.py` 统一管理启动、停止、状态、并发、章节数和 resume。`status --compact`
+只返回低 Token 进度摘要。底层 `run_eqbench_longform.py` 仍可直接调用，但属于实现入口。
 
 不要把 API Key 写入文件、报告或提交记录。
 

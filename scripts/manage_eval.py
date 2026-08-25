@@ -29,6 +29,30 @@ def _paths(output: Path) -> dict[str, Path]:
     }
 
 
+def _progress(output: Path) -> dict:
+    partial = output.with_name(f"{output.stem}.partial_results.json")
+    failures = output.with_name(f"{output.stem}.failures.json")
+    result = {"completed_samples": 0, "failures": 0, "chapters_saved": 0}
+    if partial.exists():
+        try:
+            result["completed_samples"] = len(
+                json.loads(partial.read_text()).get("results", [])
+            )
+        except (OSError, json.JSONDecodeError):
+            pass
+    if failures.exists():
+        try:
+            result["failures"] = len(
+                json.loads(failures.read_text()).get("failures", [])
+            )
+        except (OSError, json.JSONDecodeError):
+            pass
+    chapter_root = output.with_name(f"{output.stem}.chapters")
+    if chapter_root.exists():
+        result["chapters_saved"] = len(list(chapter_root.rglob("chapter_*.txt")))
+    return result
+
+
 def start(args: argparse.Namespace) -> int:
     paths = _paths(args.output)
     if paths["status"].exists():
@@ -50,7 +74,19 @@ def start(args: argparse.Namespace) -> int:
         "STORY_TIMEOUT": str(args.story_timeout),
         "EQBENCH_OUT": str(args.output),
         "RESUME": "1" if args.resume else "0",
+        "N_CHAPTERS": str(args.chapters),
+        "CHAPTER_TIMEOUT": str(args.chapter_timeout),
+        "BRIDGE_TIMEOUT": str(args.bridge_timeout),
+        "NOVEL_MAX_ROUNDS": str(args.max_rounds),
+        "NOVEL_WRITER_PROMPT_PROFILE": args.prompt_profile,
+        "NOVEL_SKIP_ORCHESTRATOR": "1" if args.skip_orchestrator else "0",
+        "NOVEL_SKIP_REVIEWS": "1" if args.skip_reviews else "0",
+        "NOVEL_SKIP_ENRICHMENT": "1" if args.skip_enrichment else "0",
     })
+    if args.skip_bridge:
+        env["SKIP_BRIDGE"] = "1"
+    if args.prompt_index is not None:
+        env["PROMPT_INDEX"] = str(args.prompt_index)
     paths["log"].parent.mkdir(parents=True, exist_ok=True)
     log = paths["log"].open("a", encoding="utf-8")
     process = subprocess.Popen(
@@ -76,6 +112,11 @@ def start(args: argparse.Namespace) -> int:
             "concurrency": args.concurrency,
             "story_timeout": args.story_timeout,
             "resume": args.resume,
+            "chapters": args.chapters,
+            "prompt_profile": args.prompt_profile,
+            "skip_bridge": args.skip_bridge,
+            "max_rounds": args.max_rounds,
+            "chapter_timeout": args.chapter_timeout,
         },
     })
     print(f"started: pid={process.pid}")
@@ -110,7 +151,16 @@ def status(args: argparse.Namespace) -> int:
             payload["status"] = "orphaned"
         payload["ended_at"] = _now()
         _write_json(paths["status"], payload)
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    payload["progress"] = _progress(Path(payload.get("output", args.output)))
+    if args.compact:
+        print(json.dumps({
+            "status": payload.get("status"),
+            "pid": payload.get("pid"),
+            "progress": payload["progress"],
+            "output": payload.get("output"),
+        }, ensure_ascii=False, separators=(",", ":")))
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -141,7 +191,18 @@ def main() -> int:
     parser.add_argument("--agents", default="novel_agent,vanilla_llm")
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--story-timeout", type=int, default=3600)
+    parser.add_argument("--chapters", type=int, default=8)
+    parser.add_argument("--chapter-timeout", type=int, default=600)
+    parser.add_argument("--bridge-timeout", type=int, default=300)
+    parser.add_argument("--max-rounds", type=int, default=2)
+    parser.add_argument("--prompt-profile", default="v1")
+    parser.add_argument("--prompt-index", type=int, default=None)
+    parser.add_argument("--skip-bridge", action="store_true")
+    parser.add_argument("--skip-orchestrator", action="store_true", default=True)
+    parser.add_argument("--skip-reviews", action="store_true")
+    parser.add_argument("--skip-enrichment", action="store_true", default=True)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--compact", action="store_true")
     args = parser.parse_args()
     return {"start": start, "status": status, "stop": stop}[args.command](args)
 

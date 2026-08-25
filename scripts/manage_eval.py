@@ -89,10 +89,22 @@ def start(args: argparse.Namespace) -> int:
             print(f"already running: pid={current['pid']}")
             return 1
 
-    command = [
-        sys.executable,
-        str(Path(__file__).with_name("run_eqbench_longform.py")),
-    ]
+    if args.mode == "horizontal":
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("run_horizontal_eval.py")),
+            "--agents", args.agents,
+            "--repeat", str(args.repeat),
+            "--concurrency", str(args.concurrency),
+            "--out", str(args.output),
+        ]
+        if args.resume:
+            command.append("--resume")
+    else:
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("run_eqbench_longform.py")),
+        ]
     env = os.environ.copy()
     env.update({
         "N_PROMPTS": str(args.prompts),
@@ -146,6 +158,7 @@ def start(args: argparse.Namespace) -> int:
             "max_rounds": args.max_rounds,
             "chapter_timeout": args.chapter_timeout,
             "preset": args.preset,
+            "mode": args.mode,
         },
     })
     print(f"started: pid={process.pid}")
@@ -233,6 +246,7 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--preset", choices=tuple(_PRESETS), default=None)
+    parser.add_argument("--mode", choices=("longform", "horizontal"), default="longform")
     args = parser.parse_args()
     return {"start": start, "status": status, "stop": stop}[args.command](args)
 

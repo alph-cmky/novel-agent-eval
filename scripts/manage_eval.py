@@ -89,7 +89,29 @@ _PRESETS = {
 
 def start(args: argparse.Namespace) -> int:
     preset = _PRESETS.get(args.preset, {})
-    for key, value in preset.items():
+    values = {
+        "prompts": int(os.environ.get("N_PROMPTS", "12")),
+        "repeat": int(os.environ.get("REPEAT", "3")),
+        "agents": os.environ.get("AGENTS", "novel_agent,vanilla_llm"),
+        "concurrency": int(os.environ.get("CONCURRENCY", "4")),
+        "story_timeout": int(os.environ.get("STORY_TIMEOUT", "3600")),
+        "chapters": int(os.environ.get("N_CHAPTERS", "8")),
+        "chapter_timeout": int(os.environ.get("CHAPTER_TIMEOUT", "600")),
+        "bridge_timeout": int(os.environ.get("BRIDGE_TIMEOUT", "300")),
+        "max_rounds": int(os.environ.get("NOVEL_MAX_ROUNDS", "2")),
+        "prompt_profile": os.environ.get("NOVEL_WRITER_PROMPT_PROFILE", "v1"),
+        "skip_bridge": os.environ.get("SKIP_BRIDGE", "0") == "1",
+        "skip_orchestrator": os.environ.get("NOVEL_SKIP_ORCHESTRATOR", "1") == "1",
+        "skip_reviews": os.environ.get("NOVEL_SKIP_REVIEWS", "0") == "1",
+        "skip_enrichment": os.environ.get("NOVEL_SKIP_ENRICHMENT", "1") == "1",
+        "resume": os.environ.get("RESUME", "0") == "1",
+    }
+    values.update(preset)
+    for key in values:
+        cli_value = getattr(args, key, None)
+        if cli_value is not None:
+            values[key] = cli_value
+    for key, value in values.items():
         setattr(args, key, value)
     paths = _paths(args.output)
     if paths["status"].exists():
@@ -240,22 +262,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("start", "status", "stop"))
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--prompts", type=int, default=12)
-    parser.add_argument("--repeat", type=int, default=3)
-    parser.add_argument("--agents", default="novel_agent,vanilla_llm")
-    parser.add_argument("--concurrency", type=int, default=4)
-    parser.add_argument("--story-timeout", type=int, default=3600)
-    parser.add_argument("--chapters", type=int, default=8)
-    parser.add_argument("--chapter-timeout", type=int, default=600)
-    parser.add_argument("--bridge-timeout", type=int, default=300)
-    parser.add_argument("--max-rounds", type=int, default=2)
-    parser.add_argument("--prompt-profile", default="v1")
+    parser.add_argument("--prompts", type=int, default=None)
+    parser.add_argument("--repeat", type=int, default=None)
+    parser.add_argument("--agents", default=None)
+    parser.add_argument("--concurrency", type=int, default=None)
+    parser.add_argument("--story-timeout", type=int, default=None)
+    parser.add_argument("--chapters", type=int, default=None)
+    parser.add_argument("--chapter-timeout", type=int, default=None)
+    parser.add_argument("--bridge-timeout", type=int, default=None)
+    parser.add_argument("--max-rounds", type=int, default=None)
+    parser.add_argument("--prompt-profile", default=None)
     parser.add_argument("--prompt-index", type=int, default=None)
-    parser.add_argument("--skip-bridge", action="store_true")
-    parser.add_argument("--skip-orchestrator", action="store_true", default=True)
-    parser.add_argument("--skip-reviews", action="store_true")
-    parser.add_argument("--skip-enrichment", action="store_true", default=True)
-    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--skip-bridge", action="store_true", default=None)
+    parser.add_argument("--skip-orchestrator", action="store_true", default=None)
+    parser.add_argument("--skip-reviews", action="store_true", default=None)
+    parser.add_argument("--skip-enrichment", action="store_true", default=None)
+    parser.add_argument("--resume", action="store_true", default=None)
     parser.add_argument("--compact", action="store_true")
     parser.add_argument("--preset", choices=tuple(_PRESETS), default=None)
     parser.add_argument("--mode", choices=("longform", "horizontal"), default="longform")

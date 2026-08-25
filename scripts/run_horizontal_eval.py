@@ -50,7 +50,12 @@ from novel_agent_eval.constory import ConStoryCheckerAdapter
 from novel_agent_eval.dataset.loader import load_cases
 from novel_agent_eval.judge import Judge
 from novel_agent_eval.report import render_json, render_scorecard
-from novel_agent_eval.runner import BenchmarkReport, BenchmarkRunner
+from novel_agent_eval.runner import (
+    BenchmarkReport,
+    BenchmarkResult,
+    BenchmarkRunner,
+    CaseRun,
+)
 
 
 def _build_agent_list(agent_names: list[str]) -> list:
@@ -91,6 +96,8 @@ async def main() -> None:
                         help="评测结果 JSON 输出路径")
     parser.add_argument("--resume", action="store_true", default=False,
                         help="启用断点续跑（跳过 /tmp/horizontal_eval.json 中已完成的用例）")
+    parser.add_argument("--concurrency", type=int, default=int(os.environ.get("CONCURRENCY", "4")),
+                        help="跨 Agent/case 的最大并发数")
     args = parser.parse_args()
 
     agent_names = [a.strip() for a in args.agents.split(",") if a.strip()]
@@ -113,27 +120,41 @@ async def main() -> None:
             cached_data = json.loads(out_path.read_text(encoding="utf-8"))
             for item in cached_data.get("results", []):
                 completed_keys.add((item.get("agent"), item.get("case")))
+            results.extend(_result_from_json(item) for item in cached_data.get("results", []))
             print(f"[断点续跑] 已加载 {len(completed_keys)} 个已完成的用例记录", flush=True)
         except (OSError, json.JSONDecodeError):
             pass
 
     failed = []
-    for agent in agents:
-        for case in cases:
-            if (agent.name, case.name) in completed_keys:
-                print(f"[{agent.name}] {case.name} 已在缓存中，跳过", flush=True)
-                continue
+    semaphore = asyncio.Semaphore(max(args.concurrency, 1))
+    jobs = [
+        (agent, case) for agent in agents for case in cases
+        if (agent.name, case.name) not in completed_keys
+    ]
 
+    async def run_one(agent, case):
+        async with semaphore:
             try:
                 res = await runner.run_case(agent, case, args.repeat)
+                print(f"[{res.agent}] {res.case} overall={res.overall_mean:.1f}", flush=True)
+                return res, None
             except Exception as e:  # noqa: BLE001 - one failed case must not abort the suite
-                failed.append(f"{agent.name}:{case.name}")
-                print(f"[{agent.name}] {case.name} FAILED: {type(e).__name__}: {e}", flush=True)
-                continue
+                failure = {
+                    "agent": agent.name,
+                    "case": case.name,
+                    "error_type": type(e).__name__,
+                    "error": str(e) or repr(e),
+                }
+                print(f"[{agent.name}] {case.name} FAILED: {failure['error']}", flush=True)
+                return None, failure
 
-            results.append(res)
-            dims_brief = ", ".join(f"{k}={v:.0f}" for k, v in res.dims_mean.items())
-            print(f"[{res.agent}] {res.case} overall={res.overall_mean:.1f} | {dims_brief}", flush=True)
+    for job in asyncio.as_completed([run_one(agent, case) for agent, case in jobs]):
+        result, failure = await job
+        if result is not None:
+            results.append(result)
+        if failure is not None:
+            failed.append(failure)
+        _write_checkpoint(out_path, results, failed, args.repeat, agents, cases)
 
     report = BenchmarkReport(
         results=results,
@@ -141,9 +162,35 @@ async def main() -> None:
         agents=[a.name for a in agents],
         cases=[c.name for c in cases],
     )
-    out_path.write_text(render_json(report), encoding="utf-8")
+    _write_checkpoint(out_path, results, failed, args.repeat, agents, cases)
     print(f"\n=== 结果已存 {out_path} ===\n", flush=True)
     print(render_scorecard(report), flush=True)
+
+
+def _write_checkpoint(path, results, failures, repeat, agents, cases):
+    payload = json.loads(render_json(BenchmarkReport(
+        results=results, repeat=repeat,
+        agents=[a.name for a in agents], cases=[c.name for c in cases],
+    )))
+    payload["failures"] = failures
+    temporary = Path(path).with_name(f".{Path(path).name}.tmp")
+    temporary.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _result_from_json(item):
+    return BenchmarkResult(
+        agent=item["agent"],
+        case=item["case"],
+        stage=item["stage"],
+        repeat=item["repeat"],
+        dims_mean=item.get("dims_mean", {}),
+        dims_std=item.get("dims_std", {}),
+        overall_mean=item.get("overall_mean", 0.0),
+        overall_std=item.get("overall_std", 0.0),
+        runs=[CaseRun(**run) for run in item.get("runs", [])],
+    )
 
 
 if __name__ == "__main__":

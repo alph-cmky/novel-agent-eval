@@ -183,6 +183,8 @@ async def main() -> None:
 
     results = []
     failures = []
+    persist_lock = asyncio.Lock()
+    planning_lock = asyncio.Lock()
 
     def persist_partial() -> None:
         _write_json_atomic(
@@ -211,47 +213,47 @@ async def main() -> None:
     # Create usable empty checkpoints before the first network request.
     persist_partial()
 
-    for pid, prompt in prompts:
+    async def run_prompt(pid: int, prompt: dict) -> None:
         writing_prompt = prompt["writing_prompt"]
         title = prompt["title"]
         # 同一 prompt 的 plan 只跑一次 bridge，两个 agent 共享（省一半 planning 调用）
         try:
-            if skip_bridge:
-                plan = LongformPlan(
-                    prompt_id=str(pid),
-                    title=title,
-                    category=prompt["category"],
-                    writing_prompt=writing_prompt,
-                    n_chapters=n_chapters,
-                    final_plan=(
-                        "Write an eight-chapter continuous story. Preserve the prompt's "
-                        "central premise and carry consequences forward between chapters."
-                    ),
-                    character_profiles="Infer and keep character identities consistent.",
-                )
-            else:
-                plan = await asyncio.wait_for(
-                    bridge.plan(
-                        writing_prompt,
+            async with planning_lock:
+                if skip_bridge:
+                    plan = LongformPlan(
                         prompt_id=str(pid),
                         title=title,
                         category=prompt["category"],
-                    ),
-                    timeout=bridge_timeout,
-                )
+                        writing_prompt=writing_prompt,
+                        n_chapters=n_chapters,
+                        final_plan=(
+                            "Write a continuous story. Preserve the prompt's central "
+                            "premise and carry consequences forward between chapters."
+                        ),
+                        character_profiles="Infer and keep character identities consistent.",
+                    )
+                else:
+                    plan = await asyncio.wait_for(
+                        bridge.plan(
+                            writing_prompt,
+                            prompt_id=str(pid),
+                            title=title,
+                            category=prompt["category"],
+                        ),
+                        timeout=bridge_timeout,
+                    )
         except Exception as e:  # noqa: BLE001 — planning 失败不中断其它 prompt
-            failures.append(
-                {
+            async with persist_lock:
+                failures.append({
                     "stage": "planning",
                     "prompt_id": str(pid),
                     "title": title,
                     "error_type": type(e).__name__,
                     "error": str(e),
-                }
-            )
+                })
+                persist_partial()
             print(f"[plan] {title} FAILED: {type(e).__name__}: {e}", flush=True)
-            persist_partial()
-            continue
+            return
         print(
             f"[plan] {title}: final_plan={len(plan.final_plan)} chars, "
             f"characters={len(plan.character_profiles)} chars",
@@ -327,11 +329,14 @@ async def main() -> None:
         ]
         for completed in asyncio.as_completed(jobs):
             result, failure = await completed
-            if result is not None:
-                results.append(result)
-            if failure is not None:
-                failures.append(failure)
-            persist_partial()
+            async with persist_lock:
+                if result is not None:
+                    results.append(result)
+                if failure is not None:
+                    failures.append(failure)
+                persist_partial()
+
+    await asyncio.gather(*(run_prompt(pid, prompt) for pid, prompt in prompts))
 
     print("\n=== EQ-Bench Longform degradation 报告 ===\n")
     print(render_longform_table(results))

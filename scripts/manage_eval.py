@@ -29,7 +29,7 @@ def _paths(output: Path) -> dict[str, Path]:
     }
 
 
-def _progress(output: Path) -> dict:
+def _progress(output: Path, config: dict | None = None) -> dict:
     partial = output.with_name(f"{output.stem}.partial_results.json")
     failures = output.with_name(f"{output.stem}.failures.json")
     result = {"completed_samples": 0, "failures": 0, "chapters_saved": 0}
@@ -50,6 +50,15 @@ def _progress(output: Path) -> dict:
     chapter_root = output.with_name(f"{output.stem}.chapters")
     if chapter_root.exists():
         result["chapters_saved"] = len(list(chapter_root.rglob("chapter_*.txt")))
+    if config:
+        agents = [name for name in config.get("agents", "").split(",") if name]
+        prompts = 1 if config.get("prompt_index") is not None else config.get("prompts")
+        repeat = config.get("repeat")
+        if agents and prompts and repeat:
+            result["target_samples"] = len(agents) * prompts * repeat
+            result["sample_percent"] = round(
+                result["completed_samples"] / result["target_samples"] * 100, 1
+            )
     return result
 
 
@@ -154,6 +163,7 @@ def start(args: argparse.Namespace) -> int:
             "resume": args.resume,
             "chapters": args.chapters,
             "prompt_profile": args.prompt_profile,
+            "prompt_index": args.prompt_index,
             "skip_bridge": args.skip_bridge,
             "max_rounds": args.max_rounds,
             "chapter_timeout": args.chapter_timeout,
@@ -193,7 +203,9 @@ def status(args: argparse.Namespace) -> int:
             payload["status"] = "orphaned"
         payload["ended_at"] = _now()
         _write_json(paths["status"], payload)
-    payload["progress"] = _progress(Path(payload.get("output", args.output)))
+    payload["progress"] = _progress(
+        Path(payload.get("output", args.output)), payload.get("config")
+    )
     if args.compact:
         print(json.dumps({
             "status": payload.get("status"),

@@ -33,10 +33,12 @@ def test_progress_reports_results_failures_and_saved_chapters(tmp_path):
     chapters.mkdir(parents=True)
     (chapters / "chapter_01.txt").write_text("text", encoding="utf-8")
 
-    assert _progress(output) == {
+    assert _progress(output, {"agents": "a", "prompts": 2, "repeat": 2}) == {
         "completed_samples": 2,
         "failures": 1,
         "chapters_saved": 1,
+        "target_samples": 4,
+        "sample_percent": 50.0,
     }
 
 

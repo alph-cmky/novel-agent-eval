@@ -12,6 +12,7 @@ persist_dir 缺省用每次调用的临时目录——注意不能传 ""：虽�
 为内存 MemorySaver，但主仓库 writer_node 仍会以 {persist_dir}/chroma_data 创建
 ChromaDB PersistentClient，传 "" 会在 cwd 落盘 chroma_data/ 污染仓库。
 """
+import os
 import re
 import tempfile
 import time
@@ -130,6 +131,9 @@ class NovelAgentAdapter:
             "retry_count": 0,
             "scene_first": True,
             "deterministic_gate_first": True,
+            "writer_prompt_profile": os.environ.get(
+                "NOVEL_WRITER_PROMPT_PROFILE", "v1"
+            ),
         }
         if self.max_rounds is not None:
             state["evolution_max_rounds"] = self.max_rounds

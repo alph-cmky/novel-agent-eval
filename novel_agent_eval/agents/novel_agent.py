@@ -244,35 +244,17 @@ class NovelAgentAdapter:
 
     @staticmethod
     def _extract_token_usage(values: dict) -> dict:
-        """从 NovelState 提取各角色真实 token 消耗（provider usage_metadata）。
+        """从 NovelState 提取 token 总消耗。
 
-        主仓库 orchestrator/writer/editor node 把 provider 返回的
-        input/output/cached/reasoning tokens 累加进 NovelState 同名字段
-        （orchestrator_input_tokens … editor_reasoning_tokens）。此处聚合为
-        per-role + total，供 result/trace/manifest 保存，不再输出 None。
+        主仓库 node 把 provider usage_metadata 的 input/output/cached/reasoning
+        累加进 NovelState 12 个 per-role 字段。此处求和为 total_tokens，用于判断
+        token 没反复膨胀、能发现大量浪费即可，不做计费依据。
         """
-        roles = ("orchestrator", "writer", "editor")
-        usage: dict[str, int] = {}
-        total_in = total_out = total_cached = total_reasoning = 0
-        for role in roles:
-            in_t = int(values.get(f"{role}_input_tokens") or 0)
-            out_t = int(values.get(f"{role}_output_tokens") or 0)
-            cached = int(values.get(f"{role}_cached_tokens") or 0)
-            reasoning = int(values.get(f"{role}_reasoning_tokens") or 0)
-            usage[f"{role}_input_tokens"] = in_t
-            usage[f"{role}_output_tokens"] = out_t
-            usage[f"{role}_cached_tokens"] = cached
-            usage[f"{role}_reasoning_tokens"] = reasoning
-            total_in += in_t
-            total_out += out_t
-            total_cached += cached
-            total_reasoning += reasoning
-        usage["total_input_tokens"] = total_in
-        usage["total_output_tokens"] = total_out
-        usage["total_cached_tokens"] = total_cached
-        usage["total_reasoning_tokens"] = total_reasoning
-        usage["total_tokens"] = total_in + total_out + total_cached + total_reasoning
-        return usage
+        total = 0
+        for role in ("orchestrator", "writer", "editor"):
+            for kind in ("input", "output", "cached", "reasoning"):
+                total += int(values.get(f"{role}_{kind}_tokens") or 0)
+        return {"total_tokens": total}
 
     @staticmethod
     def _packet_hash(packet: dict) -> str | None:
@@ -381,7 +363,9 @@ class NovelAgentAdapter:
                         workflow_version="v2",
                     )
                     session["runs"][chapter_number] = run
-                context_state = ContextCompiler(manager).compile_for_run(run["id"]).to_state()
+                context_state = ContextCompiler(manager).compile(
+                    project_id, chapter_number
+                ).to_state()
                 snapshot_hash = manager.get_canon_snapshot(
                     run["input_snapshot_id"]
                 )["content_hash"]

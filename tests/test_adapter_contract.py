@@ -113,7 +113,7 @@ def test_merge_empty_db_returns_eval_packet():
 # ── §0.2 真实 token trace ──
 
 
-def test_extract_token_usage_aggregates_per_role_and_total():
+def test_extract_token_usage_sums_all_roles():
     values = {
         "orchestrator_input_tokens": 100,
         "orchestrator_output_tokens": 50,
@@ -125,25 +125,11 @@ def test_extract_token_usage_aggregates_per_role_and_total():
         "editor_output_tokens": 150,
         "editor_cached_tokens": 20,
     }
-    usage = NovelAgentAdapter._extract_token_usage(values)
-
-    assert usage["orchestrator_input_tokens"] == 100
-    assert usage["writer_output_tokens"] == 2000
-    assert usage["editor_cached_tokens"] == 20
-    assert usage["editor_reasoning_tokens"] == 0  # 缺失 → 0
-    assert usage["total_input_tokens"] == 100 + 500 + 400
-    assert usage["total_output_tokens"] == 50 + 2000 + 150
-    assert usage["total_cached_tokens"] == 100 + 20
-    assert usage["total_reasoning_tokens"] == 300
-    assert usage["total_tokens"] == usage["total_input_tokens"] + usage[
-        "total_output_tokens"
-    ] + usage["total_cached_tokens"] + usage["total_reasoning_tokens"]
+    assert NovelAgentAdapter._extract_token_usage(values)["total_tokens"] == 100 + 50 + 500 + 2000 + 100 + 300 + 400 + 150 + 20
 
 
 def test_extract_token_usage_empty_state_yields_zeros():
-    usage = NovelAgentAdapter._extract_token_usage({})
-    assert usage["total_tokens"] == 0
-    assert usage["orchestrator_input_tokens"] == 0
+    assert NovelAgentAdapter._extract_token_usage({})["total_tokens"] == 0
 
 
 def test_extract_meta_tokens_no_longer_none():
@@ -240,4 +226,3 @@ def test_generate_writes_before_cleanup(monkeypatch):
     assert gen.meta["writing_run_id"]
     assert gen.meta["context_packet_hash"]
     assert gen.meta["token_usage"]["total_tokens"] == 100 + 500 + 2000
-    assert gen.meta["token_usage"]["writer_output_tokens"] == 2000

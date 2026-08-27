@@ -82,3 +82,22 @@ def build_run_manifest(config: dict[str, Any], prompt_path: Path) -> dict[str, A
         "eval_lock_hash": _sha256(eval_root / "uv.lock"),
         "config": safe_config,
     }
+
+
+def build_eval_manifest(eval_config, prompt_path: Path) -> dict[str, Any]:
+    """冻结协议入口：把 EvaluationConfig 写入 manifest，保证 run 可复现。
+
+    正式实验（baseline / 消融 / 主实验 / 横评）必须经此入口记录完整配置；
+    ``eval_config`` 为 EvaluationConfig 实例（或任意带 to_manifest_config() 的对象）。
+    凭证（STEPFUN_API_KEY 等）只经 env 传，绝不进 manifest。
+    """
+    if hasattr(eval_config, "to_manifest_config"):
+        config = eval_config.to_manifest_config()
+    elif isinstance(eval_config, dict):
+        config = eval_config
+    else:
+        raise TypeError(
+            "eval_config 必须是 EvaluationConfig 或 dict，"
+            "不允许用隐式环境变量替代实验协议"
+        )
+    return build_run_manifest(config, prompt_path)

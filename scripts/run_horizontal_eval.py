@@ -48,7 +48,9 @@ from novel_agent_eval.agents.novel_writing import NovelWritingAgentAdapter
 from novel_agent_eval.agents.vanilla_llm import VanillaLLMAdapter
 from novel_agent_eval.constory import ConStoryCheckerAdapter
 from novel_agent_eval.dataset.loader import load_cases
+from novel_agent_eval.evaluation_config import EvaluationConfig
 from novel_agent_eval.judge import Judge
+from novel_agent_eval.manifest import build_eval_manifest
 from novel_agent_eval.report import render_json, render_scorecard
 from novel_agent_eval.runner import (
     BenchmarkReport,
@@ -110,6 +112,30 @@ async def main() -> None:
     judge = Judge(n_samples=3)
     consistency_checker = ConStoryCheckerAdapter()
     runner = BenchmarkRunner(judge=judge, repeat=args.repeat, consistency_checker=consistency_checker)
+
+    # Phase 0.3：冻结评测协议，写入 manifest（凭证只经 env，不进 manifest）
+    eval_config = EvaluationConfig(
+        model="step-3.7-flash",
+        judge_model=os.environ.get("STEPFUN_JUDGE_MODEL", "step-3.7-flash"),
+        prompt_version="self_built_v1",
+        chapter_count=len(cases),
+        repeat=args.repeat,
+        max_rounds=2,
+        deterministic_gate_first=True,
+        memory_protocol="structured_narrative_state",
+        scene_first=True,
+        context_mode="bounded_memory",
+        timeout=float(os.environ["CHAPTER_TIMEOUT"]) if os.environ.get("CHAPTER_TIMEOUT") else None,
+        resume=args.resume,
+    )
+    dataset_dir = Path(args.dataset)
+    prompt_path = next(iter(dataset_dir.glob("*.json")), dataset_dir)
+    manifest = build_eval_manifest(eval_config, prompt_path)
+    manifest_path = Path(args.out).with_name(Path(args.out).name + ".manifest.json")
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"[manifest] 协议已冻结 → {manifest_path}", flush=True)
 
     # 断点续跑缓存读取
     results = []

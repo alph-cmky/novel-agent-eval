@@ -3,11 +3,11 @@
 
 - 主用例：存在 evolution_best_*_report →
   用最终选定版本报告提取，composite_score 与
-  novel_agent.graph.evolution.composite_score(extract_scores(...)) 一致。
+  novel_agent.services.evolution.composite_score(extract_scores(...)) 一致。
 - 回退用例：无 best 报告 → 用当前轮报告计算。
 - continuity_by_category：从 inconsistencies 列表按 category 计数。
 """
-from novel_agent.graph.evolution import (
+from novel_agent.services.evolution import (
     EDITOR_DIMENSIONS,
     composite_score,
     extract_scores,
@@ -103,7 +103,9 @@ def test_collect_survives_partial_state():
     """空/缺字段的 state 不崩溃，数字字段退化到默认值（0 / 空 dict）。"""
     signals = InternalSignalCollector().collect({})
 
-    assert signals.composite_score == 0.0
+    # composite_score 与主仓库公式自洽（空 state 的 style_structure 默认 100，
+    # 故 composite = 100 * dimensions_weight，随公式演进自动一致，不写死 0.0）
+    assert signals.composite_score == composite_score(extract_scores({}))
     assert signals.evolution_round == 0
     assert signals.termination_reason == ""
     assert signals.editor_overall == 0

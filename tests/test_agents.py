@@ -102,19 +102,36 @@ def test_vanilla_empty_content_is_tolerated():
 
 
 def test_map_initial_state_field_mapping():
+    case = _make_case()
     adapter = NovelAgentAdapter()
-    state = adapter._map_initial_state(_make_case(), persist_dir="/tmp/eval")
+    state = adapter._map_initial_state(case, persist_dir="/tmp/eval")
 
-    assert state["project_id"] == ""  # 空 project_id 跳过 ProjectManager/Chroma 检索
-    assert state["retry_count"] == 0
+    # V2 契约：legacy 顶层 context 字段已删除（NovelState 无定义，node 不读）
+    for legacy in (
+        "character_context",
+        "world_context",
+        "recent_summary",
+        "existing_world_entities",
+        "retry_count",
+        "writer_prompt_profile",
+    ):
+        assert legacy not in state, f"legacy 字段 {legacy} 应已删除"
+
+    assert state["project_id"] == ""  # 空 project_id；generate() 会注入真实 project_id
     assert state["target_chapter_words"] == 3000
-    assert state["recent_summary"] == _make_case().previous_context
-    assert state["character_context"] == ""
-    assert state["world_context"] == ""
-    assert state["existing_world_entities"] == []
     assert state["narrative_mode"] is None
     assert state["persist_dir"] == "/tmp/eval"
+    assert state["scene_first"] is True
+    assert state["deterministic_gate_first"] is True
     assert isinstance(state["chapter_number"], int) and state["chapter_number"] >= 1
+
+    # previous_context 折叠进 V2 单一载体 context_packet.recent_summary
+    packet = state["context_packet"]
+    assert packet["recent_summary"] == case.previous_context  # 短前文不截断
+    assert packet["character_context"] == ""
+    assert packet["world_context"] == ""
+    assert packet["unresolved_foreshadowings"] == []
+    assert packet["chapter_number"] == state["chapter_number"]
 
 
 def test_map_initial_state_stage_to_story_length():
@@ -156,6 +173,16 @@ def test_extract_meta_from_final_state():
         "editor_report": {"overall_score": 80},
         "continuity_report": {"overall_score": 85},
         "human_approved": True,
+        # 真实 token trace（主仓库 node 累加进 NovelState）
+        "orchestrator_input_tokens": 1200,
+        "orchestrator_output_tokens": 300,
+        "writer_input_tokens": 5000,
+        "writer_output_tokens": 4000,
+        "writer_cached_tokens": 800,
+        "writer_reasoning_tokens": 600,
+        "editor_input_tokens": 2000,
+        "editor_output_tokens": 500,
+        "context_packet": {"recent_summary": "前文", "chapter_number": 2},
     }
     meta = NovelAgentAdapter._extract_meta(values, elapsed=1.234)
 
@@ -167,7 +194,20 @@ def test_extract_meta_from_final_state():
     assert meta["continuity_overall"] == 85
     assert meta["human_approved"] is True
     assert meta["elapsed_seconds"] == 1.234
-    assert meta["tokens"] is None  # 主仓库 state 无 token 字段
+    # 真实 token trace：不再为 None
+    assert meta["tokens"] == 1200 + 300 + 5000 + 4000 + 800 + 600 + 2000 + 500
+    usage = meta["token_usage"]
+    assert usage["orchestrator_input_tokens"] == 1200
+    assert usage["writer_output_tokens"] == 4000
+    assert usage["writer_cached_tokens"] == 800
+    assert usage["writer_reasoning_tokens"] == 600
+    assert usage["total_input_tokens"] == 1200 + 5000 + 2000
+    assert usage["total_output_tokens"] == 300 + 4000 + 500
+    assert usage["total_cached_tokens"] == 800
+    assert usage["total_reasoning_tokens"] == 600
+    # context_packet_hash 由最终 packet 计算（主仓库未落 hash 时兜底）
+    assert meta["context_packet_hash"]
+    assert isinstance(meta["context_packet_hash"], str)
 
 
 def test_extract_meta_empty_history():

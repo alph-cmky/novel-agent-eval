@@ -12,7 +12,8 @@ persist_dir 缺省用每次调用的临时目录——注意不能传 ""：虽�
 为内存 MemorySaver，但主仓库 writer_node 仍会以 {persist_dir}/chroma_data 创建
 ChromaDB PersistentClient，传 "" 会在 cwd 落盘 chroma_data/ 污染仓库。
 """
-import os
+import hashlib
+import json
 import re
 import tempfile
 import time
@@ -20,17 +21,11 @@ import zlib
 from pathlib import Path
 
 from langgraph.types import Command
+from novel_agent.api.run_service import ChapterRunService
 from novel_agent.graph.chapter import build_chapter_graph_async
 from novel_agent.memory.embeddings import ChapterStore
-
-try:
-    from novel_agent.api.run_service import ChapterRunService
-    from novel_agent.context import ContextCompiler
-    from novel_agent.storage.manager import ProjectManager
-except ModuleNotFoundError:  # pragma: no cover - old released novel-agent fallback
-    ChapterRunService = None
-    ContextCompiler = None
-    ProjectManager = None
+from novel_agent.services.context import ContextCompiler
+from novel_agent.storage.manager import ProjectManager
 
 from novel_agent_eval.agents.base import GeneratedChapter
 from novel_agent_eval.dataset.schema import EvalCase
@@ -59,6 +54,9 @@ class NovelAgentAdapter:
         skip_worldbuilding: bool = False,
         review_interval: int = 1,
         skip_evolution_enrichment: bool = False,
+        scene_first: bool = True,
+        deterministic_gate_first: bool = True,
+        resume: bool = False,
         project_id: str = "",
     ):
         self.max_rounds = max_rounds
@@ -67,6 +65,11 @@ class NovelAgentAdapter:
         self.skip_worldbuilding = skip_worldbuilding
         self.review_interval = max(review_interval, 1)
         self.skip_evolution_enrichment = skip_evolution_enrichment
+        self.scene_first = scene_first
+        self.deterministic_gate_first = deterministic_gate_first
+        # resume=True：跨进程恢复——按 name 复用已有 Project，已 approved 章节不重生。
+        # V2 durable state（Project/ChapterVersion/Canon）即真相源，不依赖 eval 侧 checkpoint。
+        self.resume = resume
         self.project_id = project_id
         if label:
             self.name = label
@@ -108,32 +111,32 @@ class NovelAgentAdapter:
         return f"{head}\n\n[...中间章节前文已由世界观记忆库接管...]\n\n{tail}"
 
     def _map_initial_state(self, case: EvalCase, persist_dir: str) -> dict:
-        """EvalCase → 主仓库 initial_state（对齐 routes.py 的字段清单）。
+        """EvalCase → 主仓库 initial_state（V2 契约：单一上下文载体 context_packet）。
 
         纯逻辑，不依赖 LLM，可单测。
+
+        V2 所有 node（orchestrator/writer/editor/continuity）只读
+        ``state["context_packet"]``，不再读取顶层 character_context /
+        world_context / recent_summary / existing_world_entities（这些是
+        V1 遗留字段，NovelState 已无定义）。故：
+        - 删除上述 legacy 顶层字段，避免向 V2 传递失效 context；
+        - previous_context 折叠进 ``context_packet["recent_summary"]``，
+          经 ContextCompiler 一次性塑造后由各 node 的 for_* 投影消费；
+        - retry_count / writer_prompt_profile 同属已废弃 V1 字段，删除。
         """
-        # project_id 置空：主仓库 node 用 `if project_id:` 短路，跳过 ProjectManager
-        # DB 读取与 ChromaDB 检索工具注册（writer/continuity 仅 project_id 非空才挂
-        # search 工具，避免触发 embedding 模型下载）；评测场景无真实项目库，置空最干净。
+        chapter_number = self._chapter_number(case)
         state = {
             "project_id": case.project_id or self.project_id,
-            "chapter_number": self._chapter_number(case),
+            "chapter_number": chapter_number,
             "chapter_outline": self._compose_chapter_outline(case),
             "story_length": _STAGE_TO_STORY_LENGTH.get(case.stage, "long"),
             "target_chapter_words": case.word_target,
             "narrative_mode": case.narrative_mode,
             "narrative_perspective": case.narrative_perspective or "",
-            "character_context": "",
-            "world_context": "",
-            "recent_summary": self._truncate_previous_context(case.previous_context),
-            "existing_world_entities": [],
+            "context_packet": self._eval_context_packet(case, chapter_number),
             "persist_dir": case.persist_dir or persist_dir,
-            "retry_count": 0,
-            "scene_first": True,
-            "deterministic_gate_first": True,
-            "writer_prompt_profile": os.environ.get(
-                "NOVEL_WRITER_PROMPT_PROFILE", "v1"
-            ),
+            "scene_first": self.scene_first,
+            "deterministic_gate_first": self.deterministic_gate_first,
         }
         if self.max_rounds is not None:
             state["evolution_max_rounds"] = self.max_rounds
@@ -147,6 +150,83 @@ class NovelAgentAdapter:
         if self.skip_evolution_enrichment:
             state["skip_evolution_enrichment"] = True
         return state
+
+    def _eval_context_packet(self, case: EvalCase, chapter_number: int) -> dict:
+        """由 EvalCase 构造 V2 ContextPacket 的初始投影。
+
+        评测场景下 previous_context 即长篇前文章节的忠实文本，折叠为
+        ``recent_summary``；character/world/foreshadowing/timeline 留空，
+        交由 ContextCompiler 在有 ProjectManager 时从 Canon 快照填充。
+        """
+        return {
+            "project_id": case.project_id or self.project_id,
+            "chapter_number": chapter_number,
+            "character_context": "",
+            "world_context": "",
+            "recent_summary": self._truncate_previous_context(case.previous_context),
+            "unresolved_foreshadowings": [],
+            "timeline_events": [],
+            "timeline_findings": [],
+        }
+
+    @staticmethod
+    def _merge_context_packet(eval_packet: dict, db_packet: dict) -> dict:
+        """合并评测 previous_context 投影与 ContextCompiler 编译出的 Canon 投影。
+
+        V2 单一上下文契约要求前文状态只经 context_packet 流转：DB 投影提供
+        结构化 Canon（角色/世界观/伏笔/时间线），eval 投影提供忠实前文
+        previous_context。recent_summary 优先取 eval（完整前文），缺失时回退
+        DB（快照内最近章摘要，每章已截断）；其余字段以 DB 为准。
+        """
+        if not db_packet:
+            return eval_packet
+        if not eval_packet:
+            return db_packet
+        merged = {**eval_packet, **db_packet}
+        eval_summary = eval_packet.get("recent_summary", "") or ""
+        db_summary = db_packet.get("recent_summary", "") or ""
+        merged["recent_summary"] = eval_summary or db_summary
+        return merged
+
+    @staticmethod
+    def _find_project_by_name(manager, name: str) -> str | None:
+        """跨进程复用：按 name 在 persist_dir 的 DB 里找已有 project，返回 id；无则 None。"""
+        for project in manager.list_projects():
+            if project.get("name") == name:
+                return project["id"]
+        return None
+
+    def _maybe_resume_chapter(
+        self, manager, project_id: str, chapter_number: int, case: EvalCase
+    ) -> GeneratedChapter | None:
+        """resume=True 且该章已 approved：返回缓存 content，跳过重生。
+
+        跨进程恢复的核心：第 N 章在进程 A 已 commit，进程 B 不应重生。
+        V2 durable state 即真相源——content 取自 chapters 表，writing_run_id
+        取自 writing_runs。进程 A 的 token_usage / context_packet_hash 随进程
+        消失，无法恢复（标记为 resumed / None），需 eval 侧逐章 checkpoint 补全。
+        """
+        chapter = manager.get_chapter(project_id, chapter_number)
+        if not chapter or chapter.get("status") != "approved":
+            return None
+        runs = manager.list_writing_runs(project_id, chapter_number)
+        run = runs[0] if runs else None
+        content = (chapter.get("draft_content") or "").strip()
+        meta = {
+            "adapter": self.name,
+            "resumed": True,
+            "project_id": project_id,
+            "writing_run_id": run["id"] if run else None,
+            "chapter_number": chapter_number,
+            "elapsed_seconds": 0.0,
+            "tokens": 0,
+            "token_usage": NovelAgentAdapter._extract_token_usage({}),
+            "evolution_rounds": 0,
+            "evolution_termination": "resumed",
+            "context_packet_hash": None,
+            "workflow_version": "v2",
+        }
+        return GeneratedChapter(content=content, meta=meta)
 
     def index_chapter(self, *, project_id: str, persist_dir: str, chapter_number: int, content: str) -> None:
         """Persist generated chapter text for subsequent longform retrieval."""
@@ -163,6 +243,47 @@ class NovelAgentAdapter:
         self._sessions.pop(key, None)
 
     @staticmethod
+    def _extract_token_usage(values: dict) -> dict:
+        """从 NovelState 提取各角色真实 token 消耗（provider usage_metadata）。
+
+        主仓库 orchestrator/writer/editor node 把 provider 返回的
+        input/output/cached/reasoning tokens 累加进 NovelState 同名字段
+        （orchestrator_input_tokens … editor_reasoning_tokens）。此处聚合为
+        per-role + total，供 result/trace/manifest 保存，不再输出 None。
+        """
+        roles = ("orchestrator", "writer", "editor")
+        usage: dict[str, int] = {}
+        total_in = total_out = total_cached = total_reasoning = 0
+        for role in roles:
+            in_t = int(values.get(f"{role}_input_tokens") or 0)
+            out_t = int(values.get(f"{role}_output_tokens") or 0)
+            cached = int(values.get(f"{role}_cached_tokens") or 0)
+            reasoning = int(values.get(f"{role}_reasoning_tokens") or 0)
+            usage[f"{role}_input_tokens"] = in_t
+            usage[f"{role}_output_tokens"] = out_t
+            usage[f"{role}_cached_tokens"] = cached
+            usage[f"{role}_reasoning_tokens"] = reasoning
+            total_in += in_t
+            total_out += out_t
+            total_cached += cached
+            total_reasoning += reasoning
+        usage["total_input_tokens"] = total_in
+        usage["total_output_tokens"] = total_out
+        usage["total_cached_tokens"] = total_cached
+        usage["total_reasoning_tokens"] = total_reasoning
+        usage["total_tokens"] = total_in + total_out + total_cached + total_reasoning
+        return usage
+
+    @staticmethod
+    def _packet_hash(packet: dict) -> str | None:
+        """对最终 context_packet 计算 sha256，作为前文状态可复现性的观测锚点。"""
+        if not packet:
+            return None
+        return hashlib.sha256(
+            json.dumps(packet, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+
+    @staticmethod
     def _extract_meta(
         values: dict, elapsed: float
     ) -> dict:
@@ -173,6 +294,7 @@ class NovelAgentAdapter:
             for h in history
             if isinstance(h, dict) and h.get("composite") is not None
         ]
+        token_usage = NovelAgentAdapter._extract_token_usage(values)
         return {
             "adapter": "novel_agent",
             # composite_score 取进化历史里最高的 composite（无 history 时为 None）
@@ -194,10 +316,14 @@ class NovelAgentAdapter:
             "human_approved": values.get("human_approved"),
             "elapsed_seconds": round(elapsed, 3),
             "workflow_version": "v2",
-            "context_packet_hash": values.get("context_packet_hash"),
+            # 主仓库未在 state 落 hash 时，由最终 context_packet 计算，保证可复现
+            "context_packet_hash": values.get("context_packet_hash")
+            or NovelAgentAdapter._packet_hash(values.get("context_packet") or {}),
             "writing_run_id": values.get("writing_run_id"),
-            # 主仓库 NovelState 无 token 计数字段（writer latest_trace 不落 state）
-            "tokens": None,
+            # 真实 token trace：per-role + total（替代旧 tokens=None）
+            "token_usage": token_usage,
+            # 兼容既有 efficiency_score / report 的 meta["tokens"] 路径：取 total_tokens
+            "tokens": token_usage["total_tokens"],
         }
 
     async def generate(self, case: EvalCase) -> GeneratedChapter:
@@ -218,12 +344,18 @@ class NovelAgentAdapter:
                 session = self._sessions.get(session_key)
                 if session is None:
                     manager = ProjectManager(Path(persist_dir))
-                    project_id = manager.init_project(
-                        name=f"eval:{case.name}",
-                        title=f"eval:{case.name}",
-                        story_length=_STAGE_TO_STORY_LENGTH.get(case.stage, "long"),
-                        target_chapter_words=case.word_target,
-                    )
+                    project_name = case.project_id or f"eval:{case.name}"
+                    # resume：跨进程按 name 复用已有 project，不再每次 init_project 随机 id
+                    project_id = None
+                    if self.resume:
+                        project_id = self._find_project_by_name(manager, project_name)
+                    if project_id is None:
+                        project_id = manager.init_project(
+                            name=project_name,
+                            title=project_name,
+                            story_length=_STAGE_TO_STORY_LENGTH.get(case.stage, "long"),
+                            target_chapter_words=case.word_target,
+                        )
                     session = {
                         "manager": manager,
                         "project_id": project_id,
@@ -233,6 +365,13 @@ class NovelAgentAdapter:
                 manager = session["manager"]
                 project_id = session["project_id"]
                 chapter_number = self._chapter_number(case)
+                # resume：已 approved 章节不重生，直接返缓存 content（跨进程恢复）
+                if self.resume:
+                    resumed = self._maybe_resume_chapter(
+                        manager, project_id, chapter_number, case
+                    )
+                    if resumed is not None:
+                        return resumed
                 run = session["runs"].get(chapter_number)
                 if run is None:
                     run = manager.create_writing_run(
@@ -252,7 +391,13 @@ class NovelAgentAdapter:
                 persist_dir=persist_dir,
             )
             initial_state = self._map_initial_state(case, persist_dir)
-            initial_state.update(context_state)
+            # V2 单一上下文契约：不直接 update（会覆盖 eval previous_context），
+            # 改为合并——DB 投影提供 Canon 结构，eval 投影保留忠实前文。
+            if context_state:
+                initial_state["context_packet"] = self._merge_context_packet(
+                    initial_state.get("context_packet") or {},
+                    context_state.get("context_packet") or {},
+                )
             if run:
                 initial_state["project_id"] = project_id
                 initial_state["writing_run_id"] = run["id"]
@@ -283,7 +428,9 @@ class NovelAgentAdapter:
 
             elapsed = time.monotonic() - start
         finally:
-            # 仅关闭当前临时目录专属的 aiosqlite 连接，不影响其他并发协程的缓存连接
+            # 仅关闭当前临时目录专属的 aiosqlite 连接（释放 checkpoints.db 句柄），
+            # 不影响其他并发协程的缓存连接。rmtree 推迟到 post-gen 写库之后，
+            # 否则 novel.db 被连临时目录一起删，attach_candidate 会 Run not found。
             db_path = Path(persist_dir) / "checkpoints.db"
             db_key = str(db_path.resolve())
             from novel_agent.graph.chapter import _async_checkpointer_cache
@@ -293,35 +440,39 @@ class NovelAgentAdapter:
                     await saver.conn.close()
                 except Exception:  # noqa: BLE001, S110 - cleanup must not mask generation errors
                     pass
-            if cleanup:
-                cleanup()
 
+        # post-gen DB writes 必须在 persist_dir rmtree 之前：attach_candidate / commit
+        # 读写 novel.db，清理过早会让 get_writing_run 返回 None。
         values = final_state.values if final_state else {}
         content = (values.get("draft_content") or "").strip()
-        if manager and run and content and ChapterRunService is not None:
-            service = ChapterRunService(manager)
-            version = service.attach_candidate(
-                run["id"],
-                content,
-                origin="evaluation",
-                scene_plan=values.get("scene_plan", []),
-                scene_drafts=values.get("scene_drafts", []),
-            )
-            worldbuilding = values.get("worldbuilding_report") or {}
-            if worldbuilding:
-                manager.create_canon_proposal(
-                    project_id,
-                    run["chapter_number"],
-                    "worldbuilding",
-                    worldbuilding,
-                    run_id=run["id"],
-                    version_id=version["id"],
+        try:
+            if manager and run and content and ChapterRunService is not None:
+                service = ChapterRunService(manager)
+                version = service.attach_candidate(
+                    run["id"],
+                    content,
+                    origin="evaluation",
+                    scene_plan=values.get("scene_plan", []),
+                    scene_drafts=values.get("scene_drafts", []),
                 )
-            for proposal in manager.list_canon_proposals(
-                project_id, run_id=run["id"], status="proposed"
-            ):
-                manager.review_canon_proposal(proposal["id"], "accepted", "evaluation approval")
-            service.commit(run["id"])
+                worldbuilding = values.get("worldbuilding_report") or {}
+                if worldbuilding:
+                    manager.create_canon_proposal(
+                        project_id,
+                        run["chapter_number"],
+                        "worldbuilding",
+                        worldbuilding,
+                        run_id=run["id"],
+                        version_id=version["id"],
+                    )
+                for proposal in manager.list_canon_proposals(
+                    project_id, run_id=run["id"], status="proposed"
+                ):
+                    manager.review_canon_proposal(proposal["id"], "accepted", "evaluation approval")
+                service.commit(run["id"])
+        finally:
+            if cleanup:
+                cleanup()
         meta = self._extract_meta(values, elapsed)
         if run:
             meta.update({

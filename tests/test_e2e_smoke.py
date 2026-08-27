@@ -3,8 +3,8 @@
 
 - Test 1：1 个自制 case + mock agent + mock judge → BenchmarkRunner.run_suite
   → render_scorecard / render_json，断言跑分卡关键节头与 JSON 结构。
-- Test 2：跨仓库（novel-agent 路径依赖）真实 import `novel_agent.style.ai_flavor.detect_ai_flavor`，
-  对 Test 1 同款固定中文章节跑一遍 AI 味检测，断言返回 dict 结构。
+- Test 2：跨仓库（novel-agent 路径依赖）真实 import `novel_agent.style.StyleAnalyzer`，
+  对 Test 1 同款固定中文章节跑一遍确定性风格分析，断言返回结构化报告。
 
 异步约定：本仓库未装 pytest-asyncio，沿用 tests/test_runner.py 的 `asyncio.run()` 助手模式。
 """
@@ -21,7 +21,7 @@ from novel_agent_eval.runner import BenchmarkReport, BenchmarkRunner
 
 _SELF_BUILT_DIR = Path(__file__).resolve().parents[1] / "novel_agent_eval" / "dataset" / "self_built"
 
-# 固定中文章节选段：多段落 + 对话，足够长使 detect_ai_flavor 的结构检查不触发「太少」。
+# 固定中文章节选段：多段落 + 对话，足够长使 StyleAnalyzer 的结构检查不触发「太少」。
 FIXED_CHINESE_TEXT = (
     "清晨的山风裹着松针的气息，从青云剑派的山门一路灌进演武场。林远站在青石台阶上，"
     "掌心贴着腰间的剑柄，指尖微微发凉。他昨夜几乎没睡，反复揣摩师父教的那一式「破云」，"
@@ -101,16 +101,18 @@ def test_full_chain_smoke():
     assert len(data["results"][0]["runs"]) == 2
 
 
-# ── Test 2：跨仓库真实 detect_ai_flavor ──
+# ── Test 2：跨仓库真实 StyleAnalyzer ──
 
 
-def test_detect_ai_flavor_cross_repo():
-    """novel_agent.style.ai_flavor 可 import 并对固定章节返回结构化的 AI 味报告。"""
-    from novel_agent.style.ai_flavor import detect_ai_flavor
+def test_style_analyzer_cross_repo():
+    """novel_agent.style.StyleAnalyzer 可 import 并对固定章节返回结构化风格报告。"""
+    from novel_agent.style import StyleAnalyzer
 
-    result = detect_ai_flavor(FIXED_CHINESE_TEXT)
+    report = StyleAnalyzer().analyze(FIXED_CHINESE_TEXT)
+    result = report.model_dump()
 
     assert isinstance(result, dict)
-    assert isinstance(result["overall_score"], int)
-    assert 0 <= result["overall_score"] <= 100
+    assert isinstance(result["ai_flavor_score"], (int, float))
+    assert 0 <= result["ai_flavor_score"] <= 100
     assert isinstance(result["issues"], list)
+    assert result.get("style_gate") in {"PASS", "WARNING", "FAIL"}

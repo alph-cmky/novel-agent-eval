@@ -2,7 +2,7 @@
 """内部信号采集 — 从原始 LangGraph graph state 提取 novel-agent 的自我评估信号。
 
 供后续报告分析「novel-agent 的自评分是否与外部 Judge 分一致」。评分公式
-完全复用主仓库 novel_agent.graph.evolution 的 extract_scores / composite_score，
+完全复用主仓库 novel_agent.services.evolution 的 extract_scores / composite_score，
 不重复实现（全局约束）。
 
 歧义解析（task-9 brief 权威版）：
@@ -14,7 +14,7 @@
 """
 from dataclasses import dataclass
 
-from novel_agent.graph.evolution import composite_score, extract_scores
+from novel_agent.services.evolution import composite_score, extract_scores
 
 # Continuity 3 类不一致（对齐 novel_agent/agents/continuity.py 的 category 枚举）
 CONTINUITY_CATEGORIES = ("character", "timeline", "worldbuilding")

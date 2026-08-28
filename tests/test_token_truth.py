@@ -47,12 +47,12 @@ def test_step37flash_marked_suspect_and_raw_preserved():
     assert u.normalized_input == 2_180_000
     # raw 永不覆盖
     assert u.raw.input_tokens == 2_180_000
-    assert u.normalization_version == "step37flash-suspect-v1"
+    assert u.normalization_version == "step37flash-suspect-v2"
 
 
 def test_rule_prefix_matching_longest_wins():
     rule = resolve_rule("stepfun", "step-3.7-flash")
-    assert rule.version == "step37flash-suspect-v1"  # exact 优先于 family 前缀
+    assert rule.version == "step37flash-suspect-v2"  # exact 优先于 family 前缀
     family = resolve_rule("stepfun", "step-9.9-mini")
     assert family.version == "stepfun-family-suspect-v1"
     other = resolve_rule("deepseek", "deepseek-v4-pro")

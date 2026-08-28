@@ -31,7 +31,10 @@ if _env_path.exists():
         os.environ.setdefault(_k, _v.strip().strip('"').strip("'"))
 os.environ["STEPFUN_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
 os.environ["STEPFUN_BASE_URL"] = os.environ.get("OPENAI_BASE_URL", "")
-os.environ.setdefault("STEPFUN_JUDGE_MODEL", "step-3.7-flash")
+# Judge/ConStory 与生成模型同 provider：默认跟随 BUDGET_MODEL（E10 也允许 env 显式覆盖）
+os.environ.setdefault(
+    "STEPFUN_JUDGE_MODEL", os.environ.get("BUDGET_MODEL", "step-3.7-flash")
+)
 
 VAULT_EVAL_DATA = pathlib.Path(
     "/Users/gaoyinrun/Documents/Obsidian Vault/novel-agent/eval-data"

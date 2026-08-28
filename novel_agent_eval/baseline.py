@@ -447,7 +447,14 @@ async def run_baseline(
         if ck.status in _SUCCESS_STATES:
             case = case_by_num.get(ck.chapter_number)
             content = _read_chapter_content(persist_dir, pid, ck.chapter_number)
-            if case and content and content.strip():
+            # Rule Gate（§3.1 正文非空/最小长度）：checkpoint 记 completed 但
+            # DB 无 committed content（如 writer 空输出静默跳过 commit）→
+            # 必须改判 invalid，不得计入完成率。
+            if not (content or "").strip():
+                cs.status = CHAPTER_INVALID
+                cs.failure_stage = "rule_gate"
+                cs.failure_reason = "empty committed content (rule gate §3.1)"
+            elif case and content.strip():
                 await _score_chapter(cs, case, content, judge, consistency_checker)
         chapter_scores.append(cs)
 

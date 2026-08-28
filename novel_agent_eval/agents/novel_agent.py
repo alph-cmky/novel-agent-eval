@@ -500,12 +500,28 @@ class NovelAgentAdapter:
                         return resumed
                 run = session["runs"].get(chapter_number)
                 if run is None:
-                    run = manager.create_writing_run(
-                        project_id,
-                        chapter_number,
-                        run_type="evaluation",
-                        workflow_version="v2",
-                    )
+                    try:
+                        run = manager.create_writing_run(
+                            project_id,
+                            chapter_number,
+                            run_type="evaluation",
+                            workflow_version="v2",
+                        )
+                    except ValueError as exc:
+                        # 上次中断/失败遗留的 active run（queued/running/...）会触发
+                        # 唯一约束——评测场景里该章已判失败，清掉 stale run 后重试一次。
+                        if "already has an active run" not in str(exc):
+                            raise
+                        stale_active = {"queued", "running", "waiting_review", "waiting_user", "retrying"}
+                        for stale in manager.list_writing_runs(project_id, chapter_number):
+                            if stale.get("status") in stale_active and ChapterRunService is not None:
+                                ChapterRunService(manager).cancel(stale["id"])
+                        run = manager.create_writing_run(
+                            project_id,
+                            chapter_number,
+                            run_type="evaluation",
+                            workflow_version="v2",
+                        )
                     session["runs"][chapter_number] = run
                 context_state = ContextCompiler(manager).compile(
                     project_id, chapter_number
@@ -574,6 +590,15 @@ class NovelAgentAdapter:
         # 读写 novel.db，清理过早会让 get_writing_run 返回 None。
         values = final_state.values if final_state else {}
         content = (values.get("draft_content") or "").strip()
+        # Rule Gate（§3.1 正文非空）：writer 空输出（如 tool 循环耗尽轮次）时
+        # 不允许静默返回成功——空章节既不会 commit，也必须以 generation 失败
+        # 上抛，让 run_durable 记 invalid，而不是伪装成 completed。
+        if not content:
+            gate = values.get("quality_gate_report") or {}
+            raise RuntimeError(
+                f"empty content from pipeline; quality_gate blocked: "
+                f"{gate.get('violations') or 'unknown'}"
+            )
         try:
             if manager and run and content and ChapterRunService is not None:
                 service = ChapterRunService(manager)

@@ -187,7 +187,10 @@ def test_extract_meta_from_final_state():
     meta = NovelAgentAdapter._extract_meta(values, elapsed=1.234)
 
     assert meta["composite_score"] == 82.5  # 历史里最高 composite
-    assert meta["evolution_rounds"] == 3
+    # 3 条 history = v0 初稿 + v1/v2 两次重写 → revision count = 2（非 len(history)）
+    assert meta["evolution_rounds"] == 2
+    assert meta["evolution_revision_count"] == 2
+    assert meta["generation_round"] == 1
     assert meta["evolution_termination"] == "converged"
     assert meta["evolution_best_version"] == 1
     assert meta["editor_overall"] == 80

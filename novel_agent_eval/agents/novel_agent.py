@@ -297,12 +297,17 @@ class NovelAgentAdapter:
             for h in history
             if isinstance(h, dict) and h.get("composite") is not None
         ]
+        # 每条 history entry 对应一版 draft：v0 = initial draft，v1..vN = rewrites。
+        # Evolution 次数 = 重写次数 = len(history) - 1；禁止把 len(history) 当轮数。
+        revision_count = max(len(history) - 1, 0)
         token_usage = NovelAgentAdapter._extract_token_usage(values)
         return {
             "adapter": "novel_agent",
             # composite_score 取进化历史里最高的 composite（无 history 时为 None）
             "composite_score": max(composites) if composites else None,
-            "evolution_rounds": len(history),
+            "generation_round": 1,  # 单章一次生成会话
+            "evolution_revision_count": revision_count,
+            "evolution_rounds": revision_count,
             "evolution_history": history,
             "evolution_termination": values.get("evolution_termination", ""),
             "quality_guard_report": values.get("quality_guard_report", {}),

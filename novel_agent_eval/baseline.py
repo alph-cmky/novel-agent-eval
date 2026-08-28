@@ -405,6 +405,11 @@ async def _score_chapter(
             if "reference" not in str(exc):
                 raise
             report = await consistency_checker.check_consistency(content)
-        cs.consistency_score = _con_score(report.total)
+        if report.failed_categories:
+            # ConStory partial/total failure: score is unreliable (total only
+            # counts successful categories) → None, not an inflated high score.
+            cs.consistency_score = None
+        else:
+            cs.consistency_score = _con_score(report.total)
         cs.consistency_errors = report.total
         cs.consistency_failed_categories = report.failed_categories

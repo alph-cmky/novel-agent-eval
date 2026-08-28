@@ -67,6 +67,11 @@ class ConsistencyError(BaseModel):
     subtype: str  # 19 子类型名
 
 
+STORY_SUCCESS = "success"
+STORY_PARTIAL = "partial"
+STORY_FAILED = "failed"
+
+
 class ConsistencyReport(BaseModel):
     character: list[ConsistencyError]
     timeline: list[ConsistencyError]
@@ -74,6 +79,21 @@ class ConsistencyReport(BaseModel):
     raw: dict[str, list[dict]]  # 19 子类型 → 官方格式错误对象（含 narrative_style 3 类）
     total: int
     failed_categories: list[str] = Field(default_factory=list)
+
+    @property
+    def status(self) -> str:
+        """success / partial / failed — 类别失败不等于零错误。"""
+        if not self.failed_categories:
+            return STORY_SUCCESS
+        if len(self.failed_categories) < len(EVALUATION_CRITERIA):
+            return STORY_PARTIAL
+        return STORY_FAILED
+
+    @property
+    def coverage(self) -> float:
+        """成功评估的类别比例（0.0~1.0）。"""
+        n = len(EVALUATION_CRITERIA)
+        return round(1.0 - len(self.failed_categories) / n, 3) if n else 1.0
 
 
 def _to_error(subtype: str, e: dict) -> ConsistencyError:

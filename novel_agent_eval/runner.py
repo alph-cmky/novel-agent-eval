@@ -270,7 +270,16 @@ class BenchmarkRunner:
                 "worldbuilding": len(report.worldbuilding),
             }
             meta["consistency_reference"] = reference
-            dims["consistency"] = 0 if report.failed_categories else con_score
+            meta["constory_status"] = report.status
+            meta["consistency_coverage"] = report.coverage
+            if report.failed_categories:
+                # ConStory partial/total failure: fall back to Judge's consistency.
+                # failure ≠ zero errors — consistency_constory=None signals the gap.
+                meta["consistency_constory"] = None
+                dims["consistency"] = js.dimensions["consistency"]
+            else:
+                meta["consistency_constory"] = con_score
+                dims["consistency"] = con_score
         overall = weighted_score(dims, case.stage)
         return CaseRun(
             run_index=run_index,

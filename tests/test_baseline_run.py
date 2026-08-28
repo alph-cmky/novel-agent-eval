@@ -75,6 +75,8 @@ class _FakeConReport:
         self.character = []
         self.timeline = []
         self.worldbuilding = []
+        self.status = "success" if not failed else "partial"
+        self.coverage = 1.0 if not failed else 0.6
 
 
 class _FakeConsistency:

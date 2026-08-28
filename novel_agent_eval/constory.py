@@ -162,16 +162,22 @@ class ConStoryCheckerAdapter:
             if "{{ Reference }}" not in template:
                 prompt += f"\n\n## Reference facts (do not invent facts)\n{reference}"
         system, user = _split_chatml(prompt)
-        resp = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
+        # LLM_THINKING_DISABLED=true（DeepSeek v4 等 hybrid 模型）：关 thinking；
+        # 否则维持 reasoning_effort=low（step-3.7-flash 实测校准）。
+        kwargs: dict = {
+            "model": self._model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=0.0,
-            max_tokens=8192,
-            reasoning_effort="low",
-        )
+            "temperature": 0.0,
+            "max_tokens": 8192,
+        }
+        if os.environ.get("LLM_THINKING_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        else:
+            kwargs["reasoning_effort"] = "low"
+        resp = await self._client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
 
     async def check_consistency(

@@ -271,19 +271,23 @@ class Judge:
         self._n_samples = n_samples  # 中位数采样次数（>1 时取各维中位数，抑制偶发极端分）
 
     async def _request(self, prompt: str) -> str:
-        # step-3.7-flash 是 reasoning 模型，这里的三项设置都是实测校准：
-        # - max_tokens=8192：2048 会让真实 Judge prompt（rubric + 全文 draft）的
-        #   content 被 reasoning 挤空（实测 4096 仍 finish=length，8192 才稳定产出）。
-        # - reasoning_effort="low"：官方入参（low/medium/high），把 reasoning 从 ~6800
-        #   压到 ~2700 token，减少间歇空 content 与 step-3.7 已知的 overthinking
-        #   （default 档会把 instruction 维打到 35 这类极端分），打分质量不降反稳。
-        resp = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=8192,
-            reasoning_effort="low",
-        )
+        # 请求参数按 provider 分流（实测校准）：
+        # - step-3.7-flash 等 reasoning 模型：max_tokens=8192 + reasoning_effort=low。
+        #   2048 会让 content 被 reasoning 挤空（实测 8192 才稳定产出）；
+        #   low 档把 reasoning 从 ~6800 压到 ~2700 token，减少间歇空 content。
+        # - LLM_THINKING_DISABLED=true（DeepSeek v4 等 hybrid 模型）：显式关 thinking，
+        #   latency 确定、计量纯净；reasoning_effort 对 DeepSeek 无效（接受但不停 thinking）。
+        kwargs: dict = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
+            "max_tokens": 8192,
+        }
+        if os.environ.get("LLM_THINKING_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        else:
+            kwargs["reasoning_effort"] = "low"
+        resp = await self._client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
 
     @staticmethod

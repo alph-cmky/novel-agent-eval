@@ -65,7 +65,7 @@ def _patch_build(monkeypatch, draft):
 
 class _FakeJudge:
     async def score(self, draft, case):
-        return JudgeScore(dimensions={d: 80 for d in QUALITY_DIMS}, overall=80, valid=True)
+        return JudgeScore(dimensions={d: 80 for d in QUALITY_DIMS}, overall=80)
 
 
 class _FakeConReport:

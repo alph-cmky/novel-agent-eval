@@ -198,15 +198,20 @@ def test_no_consistency_checker_leaves_consistency_and_meta_untouched():
     assert "consistency_constory" not in run.meta
 
 
-def test_invalid_judge_score_cannot_become_normal_high_score():
+def test_invalid_judge_score_excluded_from_quality_aggregate():
     agent = FakeAgent("a", meta=_meta())
-    invalid = JudgeScore(dimensions={d: 95 for d in QUALITY_DIMS}, overall=95, valid=False)
+    invalid = JudgeScore(dimensions={d: 95 for d in QUALITY_DIMS}, overall=95, status="parse_error")
 
-    run = _run(BenchmarkRunner(FakeJudge(invalid)).run_case(agent, _case(), repeat=1)).runs[0]
+    result = _run(BenchmarkRunner(FakeJudge(invalid)).run_case(agent, _case(), repeat=1))
+    run = result.runs[0]
 
-    assert run.meta["judge_valid"] is False
-    assert all(run.dimensions[d] == 0 for d in QUALITY_DIMS)
-    assert run.overall < 10
+    assert run.valid is False
+    assert run.meta["judge_status"] == "parse_error"
+    # 诊断分保留（不清零），但 valid=False 使其不参与 quality aggregate
+    assert run.dimensions["consistency"] == 95
+    assert result.valid_count == 0
+    assert result.invalid_count == 1
+    assert result.judge_validity_rate == 0.0
 
 
 # ── run_suite：agent × case 全遍历 ──────────────────────

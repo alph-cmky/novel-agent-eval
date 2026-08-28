@@ -24,7 +24,7 @@ from typing import Any
 from novel_agent_eval.agents.novel_agent import NovelAgentAdapter
 from novel_agent_eval.constory import consistency_score
 from novel_agent_eval.ground_truth import ground_truth_metrics
-from novel_agent_eval.judge import QUALITY_DIMS, Judge, JudgeScore
+from novel_agent_eval.judge import Judge, JudgeScore
 from novel_agent_eval.metrics import efficiency_score, weighted_score
 
 EFFICIENCY_DIM = "efficiency"
@@ -41,6 +41,7 @@ class CaseRun:
     dimensions: dict[str, int]   # 9 维 = 8 质量维 + efficiency，各 0-100
     overall: float               # weighted_score(scores, case.stage)
     meta: dict[str, Any]         # 生成 meta（elapsed/tokens/evolution_rounds 等）
+    valid: bool = True           # False = judge 失败，分数仅作诊断，不参与 quality aggregate
 
 
 @dataclass
@@ -56,10 +57,18 @@ class BenchmarkResult:
     overall_mean: float
     overall_std: float
     runs: list[CaseRun] = field(default_factory=list)   # 每次运行的 per-run 结果
+    valid_count: int = 0        # judge 成功的 run 数
+    invalid_count: int = 0      # judge 失败的 run 数
 
     @property
     def dims(self) -> list[str]:
         return list(self.dims_mean)
+
+    @property
+    def judge_validity_rate(self) -> float:
+        """judge 成功率 = valid_count / (valid + invalid)。"""
+        total = self.valid_count + self.invalid_count
+        return round(self.valid_count / total, 3) if total else 0.0
 
 
 @dataclass
@@ -233,10 +242,8 @@ class BenchmarkRunner:
         dims = {**js.dimensions, EFFICIENCY_DIM: eff}
         meta = dict(gen.meta)
         meta["ground_truth"] = ground_truth_metrics(gen.content, case.ground_truth)
-        meta["judge_valid"] = js.valid
-        if not js.valid:
-            # Judge 失败的诊断分不参与正常评测，避免部分/兜底分抬高总分。
-            dims.update({d: 0 for d in QUALITY_DIMS})
+        meta["judge_status"] = js.status
+        # Judge 失败时保留诊断分（不清零），但标记 valid=False 使其不参与 quality aggregate
         if self._consistency_checker is not None:
             reference = {
                 "ground_truth": case.ground_truth,
@@ -270,17 +277,22 @@ class BenchmarkRunner:
             dimensions=dims,
             overall=overall,
             meta=meta,
+            valid=js.valid,
         )
 
     @staticmethod
     def _aggregate(agent, case, runs: list[CaseRun]) -> BenchmarkResult:
-        dims = list(runs[0].dimensions) if runs else []
+        valid_runs = [r for r in runs if r.valid]
+        invalid_runs = [r for r in runs if not r.valid]
+        # Quality 统计只含 judge 成功的 run；全部失败时用诊断分兜底（validity_rate=0 暴露问题）
+        quality_source = valid_runs if valid_runs else runs
+        dims = list(quality_source[0].dimensions) if quality_source else []
         dims_mean = {}
         dims_std = {}
         for d in dims:
-            vals = [float(r.dimensions[d]) for r in runs]
+            vals = [float(r.dimensions[d]) for r in quality_source]
             dims_mean[d], dims_std[d] = _mean_std(vals)
-        overalls = [r.overall for r in runs]
+        overalls = [r.overall for r in quality_source]
         overall_mean, overall_std = _mean_std(overalls)
         return BenchmarkResult(
             agent=agent.name,
@@ -292,6 +304,8 @@ class BenchmarkRunner:
             overall_mean=overall_mean,
             overall_std=overall_std,
             runs=runs,
+            valid_count=len(valid_runs),
+            invalid_count=len(invalid_runs),
         )
 
     # -- run_ablation：消融配置对比 --

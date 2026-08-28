@@ -89,10 +89,22 @@ _RUBRIC_TABLE = [
 ]
 
 
+JUDGE_SUCCESS = "success"
+JUDGE_INVALID_OUTPUT = "invalid_output"
+JUDGE_PROVIDER_ERROR = "provider_error"
+JUDGE_TIMEOUT = "timeout"
+JUDGE_PARSE_ERROR = "parse_error"
+
+
 class JudgeScore(BaseModel):
     dimensions: dict[str, int]   # 8 质量维，各 0-100
     overall: int
-    valid: bool = True            # 解析失败/维度不完整时为 False，分数仅作诊断兜底
+    status: str = JUDGE_SUCCESS  # success/invalid_output/provider_error/timeout/parse_error
+
+    @property
+    def valid(self) -> bool:
+        """True when judge produced a usable score (status == success)."""
+        return self.status == JUDGE_SUCCESS
 
 
 def _build_judge_prompt(draft: str, case: EvalCase) -> str:
@@ -299,17 +311,29 @@ class Judge:
         return self._median_scores(samples)
 
     async def _score_once(self, draft: str, case: EvalCase) -> JudgeScore:
-        """单次打分：解析失败或维度缺失时重试，最多 max_attempts 次。"""
+        """单次打分：解析失败或维度缺失时重试，最多 max_attempts 次。
+
+        失败不伪装成低分：provider error / timeout / parse error / invalid output
+        各有独立 status，调用方可据此区分 judge 失败与真实低分。
+        """
         prompt = _build_judge_prompt(draft, case)
         data = None
+        last_status = JUDGE_PARSE_ERROR
         for _ in range(self._max_attempts):
-            content = await self._request(prompt)
+            try:
+                content = await self._request(prompt)
+            except TimeoutError:
+                last_status = JUDGE_TIMEOUT
+                continue
+            except Exception:  # noqa: BLE001 - provider error 类型不固定，全部归为 provider_error
+                last_status = JUDGE_PROVIDER_ERROR
+                continue
             data = _parse_judge_json(content)
             if data is not None and _has_full_dims(data):
                 return self._to_score(data)
-        # 重试耗尽不能伪装成一次正常的低分评测。
+            last_status = JUDGE_PARSE_ERROR if data is None else JUDGE_INVALID_OUTPUT
         score = self._to_score(data)
-        score.valid = False
+        score.status = last_status
         return score
 
     @staticmethod
@@ -322,4 +346,7 @@ class Judge:
 
         dims = {d: _med([s.dimensions[d] for s in samples]) for d in QUALITY_DIMS}
         overall = _med([s.overall for s in samples])
-        return JudgeScore(dimensions=dims, overall=overall, valid=all(s.valid for s in samples))
+        # 任一样本失败 → 整体失败（传播最严重 status）
+        failed = [s for s in samples if s.status != JUDGE_SUCCESS]
+        status = failed[0].status if failed else JUDGE_SUCCESS
+        return JudgeScore(dimensions=dims, overall=overall, status=status)

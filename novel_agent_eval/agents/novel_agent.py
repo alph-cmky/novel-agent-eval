@@ -55,10 +55,11 @@ class NovelAgentAdapter:
         skip_worldbuilding: bool = False,
         review_interval: int = 1,
         skip_evolution_enrichment: bool = False,
-        scene_first: bool = True,
-        deterministic_gate_first: bool = True,
+        scene_first: bool = False,
+        deterministic_gate_first: bool = False,
         resume: bool = False,
         project_id: str = "",
+        synthetic_context: bool = False,
     ):
         self.max_rounds = max_rounds
         self.skip_orchestrator = skip_orchestrator
@@ -66,12 +67,17 @@ class NovelAgentAdapter:
         self.skip_worldbuilding = skip_worldbuilding
         self.review_interval = max(review_interval, 1)
         self.skip_evolution_enrichment = skip_evolution_enrichment
+        # B-1 parity：默认值必须与主仓库 API 入口 initial_state（routes.py:636-648）
+        # 一致 —— scene_first=False、deterministic_gate_first 不启用。
         self.scene_first = scene_first
         self.deterministic_gate_first = deterministic_gate_first
         # resume=True：跨进程恢复——按 name 复用已有 Project，已 approved 章节不重生。
         # V2 durable state（Project/ChapterVersion/Canon）即真相源，不依赖 eval 侧 checkpoint。
         self.resume = resume
         self.project_id = project_id
+        # B-3：默认 False → 上下文以 V2 DB（真实 Production ContextCompiler）为准；
+        # 仅专门测试「有限 harness context」的 benchmark 才置 True（显式标记）。
+        self.synthetic_context = synthetic_context
         if label:
             self.name = label
         # None → 每次 generate 用临时目录；也可显式指定（持久化调试用）
@@ -155,29 +161,34 @@ class NovelAgentAdapter:
     def _eval_context_packet(self, case: EvalCase, chapter_number: int) -> dict:
         """由 EvalCase 构造 V2 ContextPacket 的初始投影。
 
-        评测场景下 previous_context 即长篇前文章节的忠实文本，折叠为
-        ``recent_summary``；character/world/foreshadowing/timeline 留空，
-        交由 ContextCompiler 在有 ProjectManager 时从 Canon 快照填充。
+        previous_context 属 benchmark 输入（DB 为空时是唯一前文来源）。
+        synthetic_context=True 时才做 head+tail 截断——那是专门测试
+        「有限 harness context」的模式；默认路径不做 eval 侧 memory 模拟，
+        长篇前文一律由 V2 DB 经 ContextCompiler 提供。
         """
+        prev = case.previous_context or ""
+        if self.synthetic_context:
+            prev = self._truncate_previous_context(prev)
         return {
             "project_id": case.project_id or self.project_id,
             "chapter_number": chapter_number,
             "character_context": "",
             "world_context": "",
-            "recent_summary": self._truncate_previous_context(case.previous_context),
+            "recent_summary": prev,
             "unresolved_foreshadowings": [],
             "timeline_events": [],
             "timeline_findings": [],
         }
 
     @staticmethod
-    def _merge_context_packet(eval_packet: dict, db_packet: dict) -> dict:
+    def _merge_context_packet(
+        eval_packet: dict, db_packet: dict, *, prefer: str = "production"
+    ) -> dict:
         """合并评测 previous_context 投影与 ContextCompiler 编译出的 Canon 投影。
 
-        V2 单一上下文契约要求前文状态只经 context_packet 流转：DB 投影提供
-        结构化 Canon（角色/世界观/伏笔/时间线），eval 投影提供忠实前文
-        previous_context。recent_summary 优先取 eval（完整前文），缺失时回退
-        DB（快照内最近章摘要，每章已截断）；其余字段以 DB 为准。
+        B-3 parity：默认 prefer="production" —— DB（真实 Production memory）优先；
+        eval previous_context 只在 DB 为空时补位（单章 benchmark 输入）。
+        prefer="synthetic" 供显式标记的 harness-context benchmark 反转优先级。
         """
         if not db_packet:
             return eval_packet
@@ -186,7 +197,10 @@ class NovelAgentAdapter:
         merged = {**eval_packet, **db_packet}
         eval_summary = eval_packet.get("recent_summary", "") or ""
         db_summary = db_packet.get("recent_summary", "") or ""
-        merged["recent_summary"] = eval_summary or db_summary
+        if prefer == "synthetic":
+            merged["recent_summary"] = eval_summary or db_summary
+        else:
+            merged["recent_summary"] = db_summary or eval_summary
         return merged
 
     @staticmethod
@@ -414,12 +428,13 @@ class NovelAgentAdapter:
                 persist_dir=persist_dir,
             )
             initial_state = self._map_initial_state(case, persist_dir)
-            # V2 单一上下文契约：不直接 update（会覆盖 eval previous_context），
-            # 改为合并——DB 投影提供 Canon 结构，eval 投影保留忠实前文。
+            # B-3 单一上下文契约：DB 投影（Production memory）默认优先；
+            # synthetic_context=True 时反转（显式标记的 harness-context benchmark）。
             if context_state:
                 initial_state["context_packet"] = self._merge_context_packet(
                     initial_state.get("context_packet") or {},
                     context_state.get("context_packet") or {},
+                    prefer="synthetic" if self.synthetic_context else "production",
                 )
             if run:
                 initial_state["project_id"] = project_id
@@ -497,6 +512,7 @@ class NovelAgentAdapter:
             if cleanup:
                 cleanup()
         meta = self._extract_meta(values, elapsed)
+        meta["synthetic_context"] = self.synthetic_context
         if run:
             meta.update({
                 "writing_run_id": run["id"],

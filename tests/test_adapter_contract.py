@@ -3,10 +3,12 @@
 
 覆盖执行方案 §0.1 / §0.2 验收点：
 - previous_context 折叠进 V2 单一载体 context_packet.recent_summary
-- _merge_context_packet：eval 前文保留 + DB Canon 结构合并
+- _merge_context_packet：B-3 production 优先（DB memory > eval previous_context），
+  synthetic_context 显式反转；DB 结构化 Canon 合并
 - 真实 token trace：per-role + total 聚合，不再为 None
 - context_packet_hash 兜底计算
-- legacy 顶层字段已删除；scene_first / deterministic_gate_first 可显式注入
+- legacy 顶层字段已删除；B-1 默认值与 Production 入口一致（scene_first /
+  deterministic_gate_first = False），可显式注入
 - generate() post-gen 写库在 rmtree 之前（清理顺序回归保护）
 """
 import asyncio
@@ -38,13 +40,17 @@ def test_previous_context_folded_into_context_packet():
     assert "recent_summary" not in state  # 顶层 legacy 字段不存在
 
 
-def test_long_previous_context_is_truncated_into_packet():
+def test_long_previous_context_truncation_is_synthetic_only():
     long_ctx = "前文。" * 2000  # 远超 1500 字上限
     case = _case(previous_context=long_ctx)
-    state = NovelAgentAdapter()._map_initial_state(case, persist_dir="/tmp")
 
-    summary = state["context_packet"]["recent_summary"]
-    # head 300 + 压缩标记 + tail 1200，有界且远短于原文
+    # 默认（production parity）：benchmark 输入原样透传，不做 eval 侧 memory 模拟
+    state = NovelAgentAdapter()._map_initial_state(case, persist_dir="/tmp")
+    assert state["context_packet"]["recent_summary"] == long_ctx
+
+    # synthetic_context=True（显式标记的 harness-context benchmark）才截断
+    synth = NovelAgentAdapter(synthetic_context=True)._map_initial_state(case, persist_dir="/tmp")
+    summary = synth["context_packet"]["recent_summary"]
     assert len(summary) < len(long_ctx)
     assert "[...中间章节前文已由世界观记忆库接管...]" in summary
 
@@ -63,15 +69,16 @@ def test_no_legacy_top_level_fields_in_state():
 
 
 def test_scene_first_and_gate_are_injectable():
-    adapter = NovelAgentAdapter(scene_first=False, deterministic_gate_first=False)
-    state = adapter._map_initial_state(_case(), persist_dir="/tmp")
-    assert state["scene_first"] is False
-    assert state["deterministic_gate_first"] is False
-
-    # 默认仍为 True（保持既有行为）
+    # B-1 parity：默认与主仓库 API 入口一致（routes.py:636-648）——均为 False
     default_state = NovelAgentAdapter()._map_initial_state(_case(), persist_dir="/tmp")
-    assert default_state["scene_first"] is True
-    assert default_state["deterministic_gate_first"] is True
+    assert default_state["scene_first"] is False
+    assert default_state["deterministic_gate_first"] is False
+
+    # 消融需要时仍可显式注入 True
+    adapter = NovelAgentAdapter(scene_first=True, deterministic_gate_first=True)
+    state = adapter._map_initial_state(_case(), persist_dir="/tmp")
+    assert state["scene_first"] is True
+    assert state["deterministic_gate_first"] is True
 
 
 # ── §0.1 _merge_context_packet ──
@@ -108,6 +115,20 @@ def test_merge_falls_back_to_db_summary_when_eval_empty():
 def test_merge_empty_db_returns_eval_packet():
     eval_packet = {"recent_summary": "eval", "chapter_number": 2}
     assert NovelAgentAdapter._merge_context_packet(eval_packet, {}) == eval_packet
+
+
+def test_merge_production_prefers_db_summary_when_both_present():
+    """B-3 parity：DB（Production memory）非空时优先于 eval previous_context。"""
+    eval_packet = NovelAgentAdapter()._eval_context_packet(_case("eval 前文"), 3)
+    db_packet = {"recent_summary": "DB 最近章摘要"}
+    merged = NovelAgentAdapter._merge_context_packet(eval_packet, db_packet)
+    assert merged["recent_summary"] == "DB 最近章摘要"
+
+    # synthetic_context benchmark 显式反转优先级
+    merged_synth = NovelAgentAdapter._merge_context_packet(
+        eval_packet, db_packet, prefer="synthetic"
+    )
+    assert merged_synth["recent_summary"] == "eval 前文"
 
 
 # ── §0.2 真实 token trace ──

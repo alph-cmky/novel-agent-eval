@@ -121,8 +121,8 @@ def test_map_initial_state_field_mapping():
     assert state["target_chapter_words"] == 3000
     assert state["narrative_mode"] is None
     assert state["persist_dir"] == "/tmp/eval"
-    assert state["scene_first"] is True
-    assert state["deterministic_gate_first"] is True
+    assert state["scene_first"] is False  # B-1 parity：与 Production 入口默认一致
+    assert state["deterministic_gate_first"] is False  # B-1 parity
     assert isinstance(state["chapter_number"], int) and state["chapter_number"] >= 1
 
     # previous_context 折叠进 V2 单一载体 context_packet.recent_summary

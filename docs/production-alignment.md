@@ -121,32 +121,21 @@ editor:       input / output / cached / reasoning
 | 项 | 值 |
 |---|---|
 | 仓库路径 | `/Users/gaoyinrun/Desktop/qy/novel-agent-eval` |
-| commit SHA | `dd5024d01b5e30951874e244bdace8aa8097875d` |
+| commit SHA | `67619be`（baseline freeze 后） |
 | 分支 | `master` |
-| 工作区状态 | **有未提交改动**（见下） |
+| 工作区状态 | **干净** |
 | Python | 3.12（`.python-version`） |
 | 包管理 | uv（`uv.lock` 存在，717 KB） |
-| pytest 收集 | **190 / 191 tests**（1 deselected） |
+| pytest | **190 passed, 1 deselected** |
 | ruff check | All checks passed |
-| ruff format | **60 files would be reformatted**（未格式化） |
+| ruff format | 60 文件待格式化（pre-existing，与本次改动无关） |
 
-#### 未提交改动
+#### 已修复的 adapter 问题（Phase 0 freeze 期间）
 
-```text
-Modified:
-  novel_agent_eval/agents/novel_agent.py   (+36/-? adapter 改动)
-  tests/test_adapter_contract.py
-  tests/test_agents.py
-  uv.lock                                 (1527 行变化，lock 文件大幅分叉)
-Untracked:
-  novel_agent_eval/baseline.py
-  scripts/smoke_phase2_baseline.py
-  tests/test_baseline.py
-  tests/test_baseline_run.py
-```
-
-> **风险**：基线不干净。adapter 有未提交改动 + 未跟踪的 baseline 新文件。
-> Phase 0 建议先 commit 或 stash，否则后续 Phase 1 的改动无法与基线区分。
+- `compile_for_run(run["id"])` → `compile(project_id, chapter_number)`：
+  adapter 原调用 Production 不存在的方法，已改为真实 `ContextCompiler.compile()` API。
+- `_extract_token_usage` 简化为只返回 `total_tokens`（去掉 per-role 明细），
+  对应 Phase 1 Task E3/E4 待补全 per-role 记账。
 
 #### Benchmark Cases
 
@@ -371,7 +360,7 @@ run_durable(adapter, cases, persist_dir, checkpoint_path, resume)
 | 7 | ConStory failure → 0 分 | Plan | E2 | Phase 1 |
 | 8 | External planner 未标记 | Plan | E9 | Phase 2 |
 | 9 | P1-P6 假设过时 | Production 现状 | — | Phase 4 需修正 |
-| 10 | Eval 工作区不干净 | — | — | 阻塞 Phase 1 |
+| 10 | ~~Eval 工作区不干净~~ | — | — | **已解决**（67619be 提交后干净） |
 
 ---
 
@@ -380,11 +369,10 @@ run_durable(adapter, cases, persist_dir, checkpoint_path, resume)
 1. **Production（a29be27）基线可信**：干净、423 tests、ruff 全过。
    Plan Phase 4 的 P1-P6 已在 Production 落地，Plan 需据此修正。
 
-2. **Eval（dd5024d）基线不可信**：有未提交改动 + 未跟踪文件 + 60 文件未格式化。
-   **建议**：进入 Phase 1 前先 commit / stash 当前改动并跑 `ruff format`。
-
-3. **最高优先级**（Phase 1）：E1-E5 修复 Eval 评分正确性，其中 E3/E4 同时影响
+2. **Eval（67619be）基线可信**：工作区干净、190 tests 全过、ruff check 全过。
+   adapter `compile_for_run` 已修复为 `compile()`。
+   Phase 1 最高优先级：E1-E5 修复 Eval 评分正确性，其中 E3/E4 同时影响
    Production（token 记账双方都缺）。
 
-4. **Plan 文档需更新**：Phase 4（P1-P6）和 Phase 6（P10-P12）的多数任务
+3. **Plan 文档需更新**：Phase 4（P1-P6）和 Phase 6（P10-P12）的多数任务
    已在 Production `a29be27` 实现，不应重复执行。

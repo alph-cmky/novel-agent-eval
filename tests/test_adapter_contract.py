@@ -125,7 +125,13 @@ def test_extract_token_usage_sums_all_roles():
         "editor_output_tokens": 150,
         "editor_cached_tokens": 20,
     }
-    assert NovelAgentAdapter._extract_token_usage(values)["total_tokens"] == 100 + 50 + 500 + 2000 + 100 + 300 + 400 + 150 + 20
+    usage = NovelAgentAdapter._extract_token_usage(values)
+    # total = input + output only (cached⊂input, reasoning⊂output — no double count)
+    assert usage["total_tokens"] == 100 + 50 + 500 + 2000 + 400 + 150
+    assert usage["total_input_tokens"] == 100 + 500 + 400
+    assert usage["total_output_tokens"] == 50 + 2000 + 150
+    assert usage["cached_tokens"] == 100 + 20       # telemetry, not in total
+    assert usage["reasoning_tokens"] == 300          # telemetry, not in total
 
 
 def test_extract_token_usage_empty_state_yields_zeros():

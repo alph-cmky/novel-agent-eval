@@ -194,8 +194,8 @@ def test_extract_meta_from_final_state():
     assert meta["continuity_overall"] == 85
     assert meta["human_approved"] is True
     assert meta["elapsed_seconds"] == 1.234
-    # 真实 token trace：不再为 None
-    assert meta["tokens"] == 1200 + 300 + 5000 + 4000 + 800 + 600 + 2000 + 500
+    # token trace：total = input + output（cached⊂input, reasoning⊂output 不重复计入）
+    assert meta["tokens"] == 1200 + 300 + 5000 + 4000 + 2000 + 500
     assert meta["token_usage"]["total_tokens"] == meta["tokens"]
     # context_packet_hash 由最终 packet 计算（主仓库未落 hash 时兜底）
     assert meta["context_packet_hash"]

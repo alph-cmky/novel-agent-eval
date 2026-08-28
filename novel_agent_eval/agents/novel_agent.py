@@ -244,17 +244,30 @@ class NovelAgentAdapter:
 
     @staticmethod
     def _extract_token_usage(values: dict) -> dict:
-        """从 NovelState 提取 token 总消耗。
+        """从 NovelState 提取 token 消耗（去重）。
 
-        主仓库 node 把 provider usage_metadata 的 input/output/cached/reasoning
-        累加进 NovelState 12 个 per-role 字段。此处求和为 total_tokens，用于判断
-        token 没反复膨胀、能发现大量浪费即可，不做计费依据。
+        provider 语义：cached ⊂ input，reasoning ⊂ output。
+        total = sum(input + output) per role；cached/reasoning 是 telemetry，
+        不重复计入 total，单独报告供诊断。
+
+        主仓库 node 把 provider usage_metadata 累加进 NovelState per-role 字段。
         """
-        total = 0
+        total_input = 0
+        total_output = 0
+        total_cached = 0
+        total_reasoning = 0
         for role in ("orchestrator", "writer", "editor"):
-            for kind in ("input", "output", "cached", "reasoning"):
-                total += int(values.get(f"{role}_{kind}_tokens") or 0)
-        return {"total_tokens": total}
+            total_input += int(values.get(f"{role}_input_tokens") or 0)
+            total_output += int(values.get(f"{role}_output_tokens") or 0)
+            total_cached += int(values.get(f"{role}_cached_tokens") or 0)
+            total_reasoning += int(values.get(f"{role}_reasoning_tokens") or 0)
+        return {
+            "total_input_tokens": total_input,
+            "total_output_tokens": total_output,
+            "cached_tokens": total_cached,
+            "reasoning_tokens": total_reasoning,
+            "total_tokens": total_input + total_output,
+        }
 
     @staticmethod
     def _packet_hash(packet: dict) -> str | None:

@@ -14,6 +14,7 @@ ChromaDB PersistentClient，传 "" 会在 cwd 落盘 chroma_data/ 污染仓库�
 """
 import hashlib
 import json
+import os
 import re
 import tempfile
 import time
@@ -244,14 +245,20 @@ class NovelAgentAdapter:
 
     @staticmethod
     def _extract_token_usage(values: dict) -> dict:
-        """从 NovelState 提取 token 消耗（去重）。
+        """从 NovelState 提取 token 消耗（去重 + validity 标注）。
 
         provider 语义：cached ⊂ input，reasoning ⊂ output。
         total = sum(input + output) per role；cached/reasoning 是 telemetry，
         不重复计入 total，单独报告供诊断。
 
+        数值为 provider usage_metadata 原始报告（raw），按 token_truth 规则
+        注入 validity / normalization 元数据。step-3.7-flash 经 A-5 实验证实
+        在 graph 执行上下文内报告 600-2900× 膨胀 → suspect，不进 trusted 聚合。
+
         主仓库 node 把 provider usage_metadata 累加进 NovelState per-role 字段。
         """
+        from novel_agent_eval.token_truth import annotate_usage, detect_provider
+
         total_input = 0
         total_output = 0
         total_cached = 0
@@ -269,13 +276,19 @@ class NovelAgentAdapter:
             total_output += int(values.get(f"{role}_output_tokens") or 0)
             total_cached += int(values.get(f"{role}_cached_tokens") or 0)
             total_reasoning += int(values.get(f"{role}_reasoning_tokens") or 0)
-        return {
+        usage = {
             "total_input_tokens": total_input,
             "total_output_tokens": total_output,
             "cached_tokens": total_cached,
             "reasoning_tokens": total_reasoning,
             "total_tokens": total_input + total_output,
         }
+        # role → 模型：与主仓库 ModelRouter.route_for 对齐
+        quality = os.environ.get("QUALITY_MODEL", "")
+        budget = os.environ.get("BUDGET_MODEL", "")
+        models = [m for m in (quality, budget) if m]
+        provider = detect_provider(os.environ.get("OPENAI_BASE_URL", ""))
+        return annotate_usage(usage, provider=provider, models=models)
 
     @staticmethod
     def _packet_hash(packet: dict) -> str | None:

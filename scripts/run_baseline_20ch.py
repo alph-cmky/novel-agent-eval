@@ -139,7 +139,9 @@ async def main() -> None:
     )
     print(f"[baseline20] manifest → {out_dir / 'manifest.json'}", flush=True)
 
-    persist = tempfile.mkdtemp(prefix=f"novel_{run_tag}_")
+    # 稳定 persist_dir：跨调用 resume 依赖 V2 DB（Project by name）存活，
+    # 必须落在输出目录而非临时目录——否则每次重启都会整段重跑。
+    persist = str(out_dir / "v2_state")
     checkpoint = out_dir / "run.checkpoint.json"
 
     adapter = NovelAgentAdapter(

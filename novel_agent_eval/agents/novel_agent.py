@@ -256,7 +256,15 @@ class NovelAgentAdapter:
         total_output = 0
         total_cached = 0
         total_reasoning = 0
-        for role in ("orchestrator", "writer", "editor"):
+        roles = (
+            "orchestrator",
+            "writer",
+            "editor",
+            "continuity",
+            "worldbuilding",
+            "evolution",
+        )
+        for role in roles:
             total_input += int(values.get(f"{role}_input_tokens") or 0)
             total_output += int(values.get(f"{role}_output_tokens") or 0)
             total_cached += int(values.get(f"{role}_cached_tokens") or 0)

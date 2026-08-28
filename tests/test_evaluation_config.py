@@ -15,10 +15,17 @@ def test_defaults_match_current_behavior():
     assert cfg.prompt_version == "v1"
     assert cfg.repeat == 1
     assert cfg.max_rounds == 2
-    assert cfg.deterministic_gate_first is True
+    # B-1 parity：机制开关默认与 Production 入口一致（routes.py:636-648）
+    assert cfg.deterministic_gate_first is False
     assert cfg.memory_protocol == "structured_narrative_state"
-    assert cfg.scene_first is True
+    assert cfg.scene_first is False
+    assert cfg.synthetic_context is False
     assert cfg.context_mode == "bounded_memory"
+    # C-1 叙事参数默认
+    assert cfg.narrative_mode is None
+    assert cfg.target_chapter_words == 3000
+    assert cfg.review_interval == 1
+    assert cfg.story_length == "long"
     assert cfg.timeout is None
     assert cfg.resume is False
     assert cfg.seed is None
@@ -54,7 +61,7 @@ def test_build_eval_manifest_records_config_without_credentials(tmp_path):
     assert manifest["config"]["model"] == "step-3.7-flash"
     assert manifest["config"]["chapter_count"] == 20
     assert manifest["config"]["max_rounds"] == 2
-    assert manifest["config"]["scene_first"] is True
+    assert manifest["config"]["scene_first"] is False
     # 复现性锚点
     assert manifest["prompt_hash"]
     assert manifest["dataset_hash"]

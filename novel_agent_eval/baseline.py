@@ -30,7 +30,7 @@ _SUCCESS_STATES = {CHAPTER_COMPLETED, CHAPTER_RESUMED}
 
 @dataclass
 class ChapterScore:
-    """单章 baseline 评分：质量 + 一致性 + 成本 + 失败语义。"""
+    """单章 baseline 评分：质量 + 一致性 + 成本 + 失败语义 + C-3/C-7 观测。"""
 
     chapter_number: int
     status: str
@@ -43,6 +43,18 @@ class ChapterScore:
     latency_seconds: float = 0.0
     failure_stage: str | None = None
     failure_reason: str | None = None
+    # C-3：上下文尺寸（writer_view 为准的 char 计量）+ Canon 存储计数
+    context_sizes: dict = field(default_factory=dict)
+    canon_counts: dict = field(default_factory=dict)
+    # C-7：evolution 路径（每轮 revision 的 focus/reviewers/writer_tokens/composite）
+    evolution_path: list[dict] = field(default_factory=list)
+
+    @property
+    def writer_context_chars(self) -> int:
+        wv = self.context_sizes.get("writer_view") or {}
+        return int(wv.get("character_context_chars", 0)) + int(
+            wv.get("recent_summary_chars", 0)
+        ) + int(wv.get("world_context_chars", 0))
 
     @property
     def is_censorship(self) -> bool:
@@ -167,6 +179,106 @@ class BaselineRunResult:
             return None
         num = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(vals))
         return round(num / denom, 3)
+
+    # ── C-5 分段统计 / C-6 三类 degradation ──
+
+    def segment_stats(self, window: int = 5) -> list[dict]:
+        """按 window 分段（如 1–5 / 6–10 / 11–15 / 16–20），每段 quality mean±std。"""
+        out: list[dict] = []
+        vals = self._overall_scores()
+        for start in range(0, len(vals), window):
+            seg = vals[start:start + window]
+            if not seg:
+                continue
+            seg_std = round(stdev(seg), 3) if len(seg) > 1 else 0.0
+            out.append({
+                "segment": f"{start + 1}-{start + len(seg)}",
+                "mean": round(fmean(seg), 3),
+                "std": seg_std,
+                "chapters": len(seg),
+            })
+        return out
+
+    @staticmethod
+    def _slope(vals: list[float]) -> float | None:
+        if len(vals) < 2:
+            return None
+        n = len(vals)
+        x_mean = (n - 1) / 2
+        y_mean = fmean(vals)
+        denom = sum((i - x_mean) ** 2 for i in range(n))
+        if denom == 0:
+            return None
+        num = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(vals))
+        return round(num / denom, 6)
+
+    @property
+    def cost_growth_slope(self) -> float | None:
+        """C-6：tokens/chapter 随章节增长的最小二乘斜率（仅成功章）。"""
+        vals = [
+            float(c.token_usage.get("total_tokens", 0) or 0)
+            for c in self.chapters if c.status in _SUCCESS_STATES
+        ]
+        return self._slope(vals)
+
+    @property
+    def context_growth_slope(self) -> float | None:
+        """C-6：writer 上下文 char 数随章节增长的斜率（仅成功章）。"""
+        vals = [
+            float(c.writer_context_chars)
+            for c in self.chapters if c.status in _SUCCESS_STATES
+        ]
+        return self._slope(vals)
+
+    @property
+    def quality_per_cost(self) -> dict | None:
+        """C-8：quality-per-cost 概览（mean quality / mean tokens per chapter）。
+
+        token 为 provider 原始报告（stepfun suspect），只用于相对比较。
+        """
+        vals = self._overall_scores()
+        tokens = [
+            float(c.token_usage.get("total_tokens", 0) or 0)
+            for c in self.chapters if c.status in _SUCCESS_STATES
+        ]
+        if not vals or not tokens or fmean(tokens) <= 0:
+            return None
+        return {
+            "quality_mean": round(fmean(vals), 3),
+            "tokens_per_chapter": round(fmean(tokens), 1),
+            "quality_per_million_tokens": round(fmean(vals) / (fmean(tokens) / 1_000_000), 3),
+        }
+
+    def evolution_gain_per_revision(self) -> list[dict]:
+        """C-8：逐轮 revision 的 quality gain（composite delta）+ writer token 增量。
+
+        writer_tokens 为累计值 → 相邻 entry 差值即该轮增量。
+        """
+        gains: list[dict] = []
+        for i, c in enumerate(self.chapters):
+            if not c.evolution_path:
+                continue
+            for j in range(1, len(c.evolution_path)):
+                prev, cur = c.evolution_path[j - 1], c.evolution_path[j]
+                comp_prev, comp_cur = prev.get("composite"), cur.get("composite")
+                wt_prev, wt_cur = prev.get("writer_tokens") or {}, cur.get("writer_tokens") or {}
+                gains.append({
+                    "chapter": c.chapter_number,
+                    "from_v": prev.get("revision"),
+                    "to_v": cur.get("revision"),
+                    "focus": cur.get("focus"),
+                    "quality_gain": (
+                        round(comp_cur - comp_prev, 3)
+                        if comp_prev is not None and comp_cur is not None else None
+                    ),
+                    "writer_input_delta": (
+                        int(wt_cur.get("input", 0)) - int(wt_prev.get("input", 0))
+                    ) or None,
+                    "writer_output_delta": (
+                        int(wt_cur.get("output", 0)) - int(wt_prev.get("output", 0))
+                    ) or None,
+                })
+        return gains
 
     # ── Consistency ──
 
@@ -323,10 +435,14 @@ async def run_baseline(
     case_by_num = {adapter._chapter_number(c): c for c in cases}
     chapter_scores: list[ChapterScore] = []
     for ck in status.checkpoints:
+        obs = ck.observations or {}
         cs = ChapterScore(
             chapter_number=ck.chapter_number, status=ck.status,
             token_usage=ck.token_usage, latency_seconds=ck.latency_seconds,
             failure_stage=ck.failure_stage, failure_reason=ck.failure_reason,
+            context_sizes=obs.get("context_sizes") or {},
+            canon_counts=obs.get("canon_counts") or {},
+            evolution_path=obs.get("evolution_path") or [],
         )
         if ck.status in _SUCCESS_STATES:
             case = case_by_num.get(ck.chapter_number)

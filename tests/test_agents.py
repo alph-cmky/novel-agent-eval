@@ -161,6 +161,59 @@ def test_chapter_number_is_deterministic():
     assert a == b
 
 
+def test_extract_cost_attribution_and_context_sizes_and_evolution_path():
+    values = {
+        "orchestrator_input_tokens": 100,
+        "orchestrator_output_tokens": 50,
+        "orchestrator_model_calls": 1,
+        "orchestrator_latency_seconds": 2.5,
+        "writer_input_tokens": 500,
+        "writer_output_tokens": 2000,
+        "writer_model_calls": 4,
+        "writer_tool_calls": 2,
+        "writer_search_calls": 1,
+        "writer_latency_seconds": 30.0,
+        "worldbuilding_input_tokens": 700,
+        "worldbuilding_model_calls": 1,
+        "context_packet": {
+            "character_context": "林远: 外门弟子",
+            "recent_summary": "第1章: 正文" * 10,
+            "world_context": "断剑: 封印",
+            "unresolved_foreshadowings": ["[第1章] 血契"],
+            "timeline_events": [{"action": "捡剑"}],
+        },
+        "evolution_history": [
+            {"v": 0, "composite": 70.0, "focus": None, "reviewers": {"editor": True, "continuity": True, "worldbuilding": True}, "writer_tokens": {"input": 500, "output": 2000}, "quality_guard": {"violations": []}},
+            {"v": 1, "composite": 80.0, "focus": ["dialogue"], "reviewers": {"editor": True, "continuity": False, "worldbuilding": False}, "writer_tokens": {"input": 1500, "output": 3000}, "quality_guard": {"violations": ["x"]}},
+        ],
+    }
+    meta = NovelAgentAdapter._extract_meta(values, elapsed=9.0)
+
+    # C-2 cost attribution：per-role 字段 + writer 独有 tool/search
+    ca = meta["cost_attribution"]
+    assert ca["orchestrator"]["model_calls"] == 1
+    assert ca["orchestrator"]["latency_seconds"] == 2.5
+    assert ca["writer"]["model_calls"] == 4
+    assert ca["writer"]["tool_calls"] == 2
+    assert ca["writer"]["search_calls"] == 1
+    assert ca["worldbuilding"]["input_tokens"] == 700
+    assert ca["editor"]["model_calls"] == 0  # 未跑 editor → 0
+
+    # C-3 context sizes：writer_view + 生产投影函数测得的其它角色视角
+    sizes = meta["context_sizes"]
+    assert sizes["writer_view"]["character_context_chars"] == len("林远: 外门弟子")
+    assert sizes["writer_view"]["foreshadowings"] == 1
+    assert "orchestrator_view" in sizes and "editor_view" in sizes and "continuity_view" in sizes
+
+    # C-7 evolution path：focus/reviewers/writer_tokens 逐轮透传
+    path = meta["evolution_path"]
+    assert len(path) == 2
+    assert path[1]["focus"] == ["dialogue"]
+    assert path[1]["reviewers"] == {"editor": True, "continuity": False, "worldbuilding": False}
+    assert path[1]["writer_tokens"] == {"input": 1500, "output": 3000}
+    assert path[1]["guard_violations"] == 1
+
+
 def test_extract_meta_from_final_state():
     values = {
         "evolution_history": [

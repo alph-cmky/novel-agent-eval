@@ -53,6 +53,8 @@ class ChapterCheckpoint:
     context_packet_hash: str | None = None
     failure_stage: str | None = None  # generation | judge | commit | timeout | ...
     failure_reason: str | None = None
+    # C-2/C-3/C-7 观测（adapter meta 的子集；失败章为空 dict）
+    observations: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -148,6 +150,7 @@ def load_run_checkpoint(path: Path) -> RunStatus | None:
             context_packet_hash=c.get("context_packet_hash"),
             failure_stage=c.get("failure_stage"),
             failure_reason=c.get("failure_reason"),
+            observations=c.get("observations") or {},
         )
         for c in payload.get("checkpoints", [])
     ]
@@ -174,6 +177,11 @@ def checkpoint_from_meta(
         run_id=meta.get("writing_run_id"),
         version_id=meta.get("version_id"),
         context_packet_hash=meta.get("context_packet_hash"),
+        observations={
+            k: meta[k]
+            for k in ("cost_attribution", "context_sizes", "canon_counts", "evolution_path")
+            if meta.get(k)
+        },
     )
 
 

@@ -35,16 +35,27 @@ class EvaluationConfig(BaseModel):
     max_rounds: int = Field(default=2, ge=0, description="单章自动进化预算；0 = 无进化对照")
 
     # ── 机制开关（单变量消融对象）──
-    deterministic_gate_first: bool = Field(default=True, description="确定性硬门禁先行，过则跳过昂贵 LLM 审查")
+    # B-1 parity：默认与 Production 入口一致（routes.py:636-648 / state.py 默认）
+    deterministic_gate_first: bool = Field(default=False, description="确定性硬门禁先行，过则跳过昂贵 LLM 审查")
     memory_protocol: MemoryProtocol = Field(
         default="structured_narrative_state",
         description="结构化叙事状态 vs 仅前文上下文（Phase 4.2 核心消融）",
     )
-    scene_first: bool = Field(default=True, description="scene-first 拆场生成 vs 整章生成")
+    scene_first: bool = Field(default=False, description="scene-first 拆场生成 vs 整章生成")
     context_mode: ContextMode = Field(
         default="bounded_memory",
         description="上下文协议：bridge / full_context / bounded_memory",
     )
+    synthetic_context: bool = Field(
+        default=False,
+        description="B-3：eval 侧 harness-context 模拟（仅专门测试有限 context 的 benchmark 置 True）",
+    )
+
+    # ── 叙事参数（C-1 固定实验条件）──
+    narrative_mode: str | None = Field(default=None, description="叙事模式：linear/unit_arc/hybrid/multi_perspective/ensemble")
+    target_chapter_words: int = Field(default=3000, ge=100, description="单章目标字数")
+    review_interval: int = Field(default=1, ge=1, description="每隔几章做一次完整 review")
+    story_length: str = Field(default="long", description="篇幅语义：short/medium/long")
 
     # ── 运行控制 ──
     timeout: float | None = Field(default=None, description="单章超时秒数；None = 不限时")

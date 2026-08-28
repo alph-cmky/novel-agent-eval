@@ -1,5 +1,7 @@
 # tests/test_baseline.py
 """Phase 2 baseline 指标 + Go/No-Go 门槛 测试（纯逻辑，不依赖 LLM / graph）。"""
+from statistics import fmean
+
 from novel_agent_eval.baseline import (
     CHAPTER_COMPLETED,
     CHAPTER_FAILED,
@@ -158,3 +160,54 @@ def test_go_no_go_fail_on_unclassifiable_failure_stage():
     gates = go_no_go_gates(runs)
     assert gates["failure_stage_classifiable"] is False
     assert gates["passed"] is False
+
+
+# ── C-5 分段 / C-6 三类 degradation / C-8 quality-per-cost ──
+
+
+def test_segment_stats_windows():
+    chapters = [_ch(i, overall=60.0 + i) for i in range(1, 21)]
+    r = _run(chapters, expected=20)
+    segs = r.segment_stats(window=5)
+    assert len(segs) == 4
+    assert segs[0]["segment"] == "1-5"
+    assert segs[0]["mean"] == round(fmean([61, 62, 63, 64, 65]), 3)
+    assert segs[3]["segment"] == "16-20"
+
+
+def test_cost_and_context_growth_slopes():
+    chapters = []
+    for i in range(1, 6):
+        c = _ch(i, tokens=1000 * i)
+        c.context_sizes = {"writer_view": {"character_context_chars": 100 * i, "recent_summary_chars": 0, "world_context_chars": 0}}
+        chapters.append(c)
+    r = _run(chapters, expected=5)
+    assert r.cost_growth_slope == 1000.0
+    assert r.context_growth_slope == 100.0
+
+
+def test_quality_per_cost():
+    chapters = [_ch(i, overall=80.0, tokens=2_000_000) for i in range(1, 3)]
+    r = _run(chapters, expected=2)
+    qpc = r.quality_per_cost
+    assert qpc["quality_mean"] == 80.0
+    assert qpc["tokens_per_chapter"] == 2_000_000.0
+    assert qpc["quality_per_million_tokens"] == 40.0
+
+
+def test_evolution_gain_per_revision():
+    path = [
+        {"revision": 0, "composite": 70.0, "writer_tokens": {"input": 500, "output": 1000}},
+        {"revision": 1, "composite": 75.0, "focus": ["dialogue"], "writer_tokens": {"input": 1500, "output": 2000}},
+    ]
+    c = _ch(1)
+    c.evolution_path = path
+    r = _run([c], expected=1)
+    gains = r.evolution_gain_per_revision()
+    assert len(gains) == 1
+    g = gains[0]
+    assert g["chapter"] == 1
+    assert g["quality_gain"] == 5.0
+    assert g["writer_input_delta"] == 1000
+    assert g["writer_output_delta"] == 1000
+    assert g["focus"] == ["dialogue"]

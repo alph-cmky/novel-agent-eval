@@ -313,8 +313,95 @@ class NovelAgentAdapter:
             json.dumps(packet, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
 
+    _ROLES = ("orchestrator", "writer", "editor", "continuity", "worldbuilding", "evolution")
+
+    @classmethod
+    def _extract_cost_attribution(cls, values: dict) -> dict:
+        """C-2：per-role cost attribution（model_calls / tokens / latency / tool calls）。
+
+        全部来自 NovelState 观测字段；数值为 provider 原始报告（token 真值以
+        token_truth validity 为准），latency 为节点 wall time。
+        """
+        attr: dict[str, dict] = {}
+        for role in cls._ROLES:
+            entry = {
+                "model_calls": int(values.get(f"{role}_model_calls") or 0),
+                "input_tokens": int(values.get(f"{role}_input_tokens") or 0),
+                "output_tokens": int(values.get(f"{role}_output_tokens") or 0),
+                "cached_tokens": int(values.get(f"{role}_cached_tokens") or 0),
+                "reasoning_tokens": int(values.get(f"{role}_reasoning_tokens") or 0),
+                "latency_seconds": round(float(values.get(f"{role}_latency_seconds") or 0.0), 3),
+            }
+            attr[role] = entry
+        # writer 独有：tool / search 调用（其余角色无工具边界）
+        attr["writer"]["tool_calls"] = int(values.get("writer_tool_calls") or 0)
+        attr["writer"]["search_calls"] = int(values.get("writer_search_calls") or 0)
+        return attr
+
     @staticmethod
+    def _extract_context_sizes(values: dict) -> dict:
+        """C-3：per-role context 投影尺寸（复用生产 ContextCompiler 投影函数，不重实现）。
+
+        最终 state 的 context_packet 是 orchestrator context_needed 检索增强后的
+        Writer 输入视角；editor/continuity/orchestrator 投影由生产静态投影函数
+        对同一 packet 求出（与节点内实际调用一致）。
+        """
+        packet = values.get("context_packet") or {}
+        if not packet:
+            return {}
+        from novel_agent.services.context import ContextCompiler
+
+        def _size(text: object) -> int:
+            return len(text) if isinstance(text, str) else 0
+
+        def _packet_size(p: dict) -> dict:
+            return {
+                "character_context_chars": _size(p.get("character_context")),
+                "world_context_chars": _size(p.get("world_context")),
+                "recent_summary_chars": _size(p.get("recent_summary")),
+                "foreshadowings": len(p.get("unresolved_foreshadowings") or []),
+                "timeline_events": len(p.get("timeline_events") or []),
+                "timeline_findings": len(p.get("timeline_findings") or []),
+            }
+
+        sizes: dict[str, dict] = {"writer_view": _packet_size(packet)}
+        for role, fn in (
+            ("orchestrator_view", ContextCompiler.for_orchestrator),
+            ("editor_view", ContextCompiler.for_editor),
+            ("continuity_view", ContextCompiler.for_continuity),
+        ):
+            try:
+                sizes[role] = _packet_size(fn(packet))
+            except Exception:  # noqa: BLE001 - 投影失败不阻断评测信号
+                sizes[role] = {}
+        return sizes
+
+    @staticmethod
+    def _extract_evolution_path(values: dict) -> list[dict]:
+        """C-7：evolution 路径——每轮 revision 的触发/focus/reviewers/writer 成本/结果。"""
+        path: list[dict] = []
+        for h in values.get("evolution_history") or []:
+            if not isinstance(h, dict):
+                continue
+            guard = h.get("quality_guard") or {}
+            path.append(
+                {
+                    "revision": h.get("v"),
+                    "composite": h.get("composite"),
+                    "editor": h.get("editor"),
+                    "continuity": h.get("continuity"),
+                    "delta": h.get("delta"),
+                    "focus": h.get("focus"),
+                    "reviewers": h.get("reviewers"),
+                    "writer_tokens": h.get("writer_tokens"),
+                    "guard_violations": len(guard.get("violations") or []),
+                }
+            )
+        return path
+
+    @classmethod
     def _extract_meta(
+        cls,
         values: dict, elapsed: float
     ) -> dict:
         """从最终 state 提取评测信号（供 Task 9 internal_signals）。"""
@@ -359,6 +446,10 @@ class NovelAgentAdapter:
             "token_usage": token_usage,
             # 兼容既有 efficiency_score / report 的 meta["tokens"] 路径：取 total_tokens
             "tokens": token_usage["total_tokens"],
+            # C-2 / C-3 / C-7：成本归因、上下文尺寸、evolution 路径
+            "cost_attribution": cls._extract_cost_attribution(values),
+            "context_sizes": cls._extract_context_sizes(values),
+            "evolution_path": cls._extract_evolution_path(values),
         }
 
     async def generate(self, case: EvalCase) -> GeneratedChapter:
@@ -519,6 +610,15 @@ class NovelAgentAdapter:
                 "project_id": run["project_id"],
                 "context_snapshot_hash": snapshot_hash,
             })
+        # C-3：Canon 存储增长（本章 commit 后的 DB 状态）
+        if manager:
+            try:
+                meta["canon_counts"] = manager.get_canon_counts(
+                    meta.get("project_id") or "",
+                    after_chapter=values.get("chapter_number", 0),
+                )
+            except Exception:  # noqa: BLE001 - 统计失败不阻断评测
+                meta["canon_counts"] = {}
         return GeneratedChapter(
             content=content,
             meta=meta,

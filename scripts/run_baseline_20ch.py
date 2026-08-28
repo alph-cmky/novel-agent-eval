@@ -16,7 +16,6 @@ import json
 import os
 import pathlib
 import sys
-import tempfile
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

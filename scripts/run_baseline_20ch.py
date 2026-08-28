@@ -72,7 +72,7 @@ CHAPTER_OUTLINES: dict[int, str] = {
 
 
 def _case(ch: int, sample: int) -> "EvalCase":
-    from novel_agent_eval.dataset.schema import EvalCase  # noqa: PLC0415
+    from novel_agent_eval.dataset.schema import EvalCase
 
     return EvalCase(
         name=f"baseline20_s{sample}_ch{ch:02d}",

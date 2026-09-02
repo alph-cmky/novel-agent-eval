@@ -217,8 +217,10 @@ async def main() -> None:
             {
                 "chapter": c.chapter_number, "status": c.status,
                 "overall": c.overall, "dimensions": c.dimensions,
+                "judge_status": c.judge_status,
                 "consistency_errors": c.consistency_errors,
                 "consistency_failed_categories": c.consistency_failed_categories,
+                "ground_truth": c.ground_truth,
                 "tokens_raw": c.token_usage.get("total_tokens"),
                 "latency_seconds": c.latency_seconds,
                 "failure_stage": c.failure_stage, "failure_reason": c.failure_reason,

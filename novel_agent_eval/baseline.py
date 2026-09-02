@@ -37,7 +37,7 @@ class ChapterScore:
     overall: float | None = None  # weighted_score（8 质量维 + efficiency）
     dimensions: dict[str, int] = field(default_factory=dict)
     consistency_score: int | None = None  # ConStory 0-100
-    consistency_errors: int = 0
+    consistency_errors: int | None = 0  # None = 类别失败，不参与 CED 统计
     consistency_failed_categories: list[str] = field(default_factory=list)
     token_usage: dict = field(default_factory=dict)
     latency_seconds: float = 0.0
@@ -48,6 +48,10 @@ class ChapterScore:
     canon_counts: dict = field(default_factory=dict)
     # C-7：evolution 路径（每轮 revision 的 focus/reviewers/writer_tokens/composite）
     evolution_path: list[dict] = field(default_factory=list)
+    # P1：确定性 ground_truth 对账（outline_coverage / foreshadowing_coverage / bug_exposure）
+    ground_truth: dict = field(default_factory=dict)
+    # P3：Judge 失败状态（null 不参与统计，非 0 分污染）
+    judge_status: str = "success"
 
     @property
     def writer_context_chars(self) -> int:
@@ -284,16 +288,18 @@ class BaselineRunResult:
 
     @property
     def ced(self) -> float | None:
-        """Consistency Error Density = 总错误数 / 章数。"""
-        if not self.chapters:
+        """Consistency Error Density = 总错误数 / 有效章数（排除类别失败章）。"""
+        valid = [c.consistency_errors for c in self.chapters if c.consistency_errors is not None]
+        if not valid:
             return None
-        return round(sum(c.consistency_errors for c in self.chapters) / len(self.chapters), 3)
+        return round(sum(valid) / len(valid), 3)
 
     def _error_window(self, start: int, width: int) -> float | None:
         seg = self.chapters[start:start + width]
-        if len(seg) != width:
+        valid = [c.consistency_errors for c in seg if c.consistency_errors is not None]
+        if len(valid) != len(seg):  # 窗口内有失败章，窗口不完整
             return None
-        return round(sum(c.consistency_errors for c in seg) / width, 3)
+        return round(sum(valid) / width, 3)
 
     @property
     def first_error_density(self) -> float | None:
@@ -497,18 +503,28 @@ async def _score_chapter(
     cs: ChapterScore, case, content: str, judge, consistency_checker
 ) -> None:
     """对齐 BenchmarkRunner._run_once 的单章评分，结果填入 cs。"""
+    from novel_agent_eval.ground_truth import ground_truth_metrics
     from novel_agent_eval.judge import QUALITY_DIMS
     from novel_agent_eval.metrics import efficiency_score, weighted_score
 
+    # P1：确定性 ground_truth 对账（0 LLM，关键词匹配）
+    cs.ground_truth = ground_truth_metrics(content, case.ground_truth)
+
     js = await judge.score(content, case)
+    cs.judge_status = js.status
     eff = efficiency_score(
         cs.latency_seconds, cs.token_usage.get("total_tokens", 0), 0
     )
     dims = {**js.dimensions, "efficiency": eff}
+    # P3：Judge 失败 → dims 置 null，overall=None，不参与均值统计
     if not js.valid:
-        dims.update({d: 0 for d in QUALITY_DIMS})
-    cs.dimensions = dims
-    cs.overall = weighted_score(dims, case.stage)
+        dims = {d: None for d in QUALITY_DIMS}
+        dims["efficiency"] = eff
+        cs.dimensions = dims
+        cs.overall = None
+    else:
+        cs.dimensions = dims
+        cs.overall = weighted_score(dims, case.stage)
 
     if consistency_checker is not None:
         from novel_agent_eval.constory import consistency_score as _con_score
@@ -532,7 +548,8 @@ async def _score_chapter(
             # ConStory partial/total failure: score is unreliable (total only
             # counts successful categories) → None, not an inflated high score.
             cs.consistency_score = None
+            cs.consistency_errors = None  # 不参与 CED 统计
         else:
             cs.consistency_score = _con_score(report.total)
-        cs.consistency_errors = report.total
+            cs.consistency_errors = report.total
         cs.consistency_failed_categories = report.failed_categories

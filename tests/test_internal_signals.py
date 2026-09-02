@@ -20,7 +20,7 @@ def _best_state():
     """best 报告已填充的完整 graph state。"""
     best_editor = {
         "overall_score": 85,
-        "dimensions": {"rhythm": 80, "ai_flavor": 70, "dialogue": 90, "logic": 75, "writing": 88},
+        "dimensions": {"consistency": 75, "writing": 88, "ai_flavor": 70, "dialogue": 90, "plot": 80, "instruction": 75, "creativity": 70, "controllability": 80},
         "issues": [],
         "highlights": [],
         "verdict": "pass",
@@ -75,7 +75,7 @@ def test_collect_falls_back_to_current_round_reports():
     state = {
         "editor_report": {
             "overall_score": 60,
-            "dimensions": {"rhythm": 50, "ai_flavor": 60, "dialogue": 70, "logic": 55, "writing": 65},
+            "dimensions": {"consistency": 55, "writing": 65, "ai_flavor": 60, "dialogue": 70, "plot": 50, "instruction": 55, "creativity": 50, "controllability": 60},
         },
         "continuity_report": {
             "overall_score": 40,

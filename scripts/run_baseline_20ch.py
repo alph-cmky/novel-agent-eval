@@ -41,7 +41,7 @@ VAULT_EVAL_DATA = pathlib.Path(
 )
 
 # ── 版本化的实验材料（C-1：prompt 变更必须 bump PROMPT_VERSION）──
-PROMPT_VERSION = "baseline20-v1"
+PROMPT_VERSION = "baseline20-v2"  # v2: editor 8维对齐 Judge (P0-B)
 STORY_OUTLINE = (
     "《断剑重铸》设定：少年沈舟在剑冢捡到一柄断裂的古剑，剑中封印着上一代剑圣的残魂。"
     "为重铸断剑，他拜入天衡剑宗，从外门弟子起步。全书写他三年内集齐三味铸剑材料、"
@@ -93,6 +93,7 @@ async def main() -> None:
     parser.add_argument("--sample", type=int, default=1)
     parser.add_argument("--no-consistency", action="store_true", help="跳过 ConStory（省 API）")
     parser.add_argument("--max-rounds", type=int, default=0, help="evolution 预算（0=无重写）")
+    parser.add_argument("--v0-gate", type=float, default=70.0, help="v0 门控阈值（>=此分跳过重写，<0 禁用）")
     parser.add_argument("--timeout", type=float, default=900.0, help="单章超时秒")
     args = parser.parse_args()
 
@@ -148,6 +149,7 @@ async def main() -> None:
 
     adapter = NovelAgentAdapter(
         max_rounds=args.max_rounds, persist_dir=persist,
+        v0_gate_score=args.v0_gate if args.max_rounds > 0 else None,
         resume=True, label=f"na_s{args.sample}",
     )
     judge = Judge(n_samples=1)

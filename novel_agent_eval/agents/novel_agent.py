@@ -57,11 +57,13 @@ class NovelAgentAdapter:
         skip_evolution_enrichment: bool = False,
         scene_first: bool = False,
         deterministic_gate_first: bool = False,
+        v0_gate_score: float | None = 70.0,
         resume: bool = False,
         project_id: str = "",
         synthetic_context: bool = False,
     ):
         self.max_rounds = max_rounds
+        self.v0_gate_score = v0_gate_score
         self.skip_orchestrator = skip_orchestrator
         self.skip_reviews = skip_reviews
         self.skip_worldbuilding = skip_worldbuilding
@@ -147,6 +149,8 @@ class NovelAgentAdapter:
         }
         if self.max_rounds is not None:
             state["evolution_max_rounds"] = self.max_rounds
+        if self.v0_gate_score is not None:
+            state["evolution_v0_gate_score"] = self.v0_gate_score
         if self.skip_orchestrator:
             state["skip_orchestrator"] = True
         if self.skip_reviews:

@@ -72,7 +72,7 @@ def test_scene_first_and_gate_are_injectable():
     # B-1 parity：默认与主仓库 API 入口一致（routes.py:636-648）——均为 False
     default_state = NovelAgentAdapter()._map_initial_state(_case(), persist_dir="/tmp")
     assert default_state["scene_first"] is False
-    assert default_state["deterministic_gate_first"] is False
+    assert default_state["deterministic_gate_first"] is True  # Phase4 消融：默认开启
 
     # 消融需要时仍可显式注入 True
     adapter = NovelAgentAdapter(scene_first=True, deterministic_gate_first=True)

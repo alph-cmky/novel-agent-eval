@@ -25,7 +25,7 @@ def test_entry_flags_match_routes_initial_state():
     """routes.py: scene_first=False；deterministic_gate_first 未设（falsy）。"""
     state = NovelAgentAdapter()._map_initial_state(_case(), persist_dir="/tmp")
     assert state["scene_first"] is False
-    assert state["deterministic_gate_first"] is False
+    assert state["deterministic_gate_first"] is True  # Phase4 消融：默认开启
 
 
 def test_review_settings_match_state_defaults():

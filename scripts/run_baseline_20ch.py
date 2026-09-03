@@ -93,7 +93,11 @@ async def main() -> None:
     parser.add_argument("--sample", type=int, default=1)
     parser.add_argument("--no-consistency", action="store_true", help="跳过 ConStory（省 API）")
     parser.add_argument("--max-rounds", type=int, default=0, help="evolution 预算（0=无重写）")
-    parser.add_argument("--v0-gate", type=float, default=70.0, help="v0 门控阈值（>=此分跳过重写，<0 禁用）")
+    parser.add_argument("--v0-gate", type=float, default=78.0, help="v0 门控阈值（>=此分跳过重写，<0 禁用）")
+    parser.add_argument("--scene-first", action="store_true", help="Phase4-A: scene_first=true")
+    parser.add_argument("--gate-first", dest="gate_first", action="store_true", default=True, help="Phase4-B: deterministic_gate_first=true（默认开启，Phase4 证实无质量损失且省 59%% token）")
+    parser.add_argument("--no-gate-first", dest="gate_first", action="store_false", help="关闭 deterministic_gate_first（对照用）")
+    parser.add_argument("--synthetic-context", action="store_true", help="Phase4-C: 仅 previous_context，无结构化叙事状态")
     parser.add_argument("--timeout", type=float, default=900.0, help="单章超时秒")
     args = parser.parse_args()
 
@@ -119,13 +123,23 @@ async def main() -> None:
         chapter_count=args.chapters,
         repeat=1,
         max_rounds=args.max_rounds,
-        scene_first=False,  # B-1 parity 默认
-        deterministic_gate_first=False,
+        scene_first=args.scene_first,
+        deterministic_gate_first=args.gate_first,
         timeout=args.timeout,
         resume=True,
     )
 
-    run_tag = f"baseline20_{args.chapters}ch_s{args.sample}_r{args.max_rounds}"
+    # run_tag 带生成模型标签 + Phase4 消融标记：不同 run 不互相覆盖
+    gen_model = os.environ.get("QUALITY_MODEL", "unknown")
+    model_tag = "".join(c if c.isalnum() else "-" for c in gen_model.lower())
+    phase_tag = ""
+    if args.scene_first:
+        phase_tag += "_scene1"
+    if args.gate_first:
+        phase_tag += "_gate1"
+    if args.synthetic_context:
+        phase_tag += "_synctx"
+    run_tag = f"baseline20_{args.chapters}ch_s{args.sample}_r{args.max_rounds}_{model_tag}{phase_tag}"
     out_dir = VAULT_EVAL_DATA / run_tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -150,6 +164,9 @@ async def main() -> None:
     adapter = NovelAgentAdapter(
         max_rounds=args.max_rounds, persist_dir=persist,
         v0_gate_score=args.v0_gate if args.max_rounds > 0 else None,
+        scene_first=args.scene_first,
+        deterministic_gate_first=args.gate_first,
+        synthetic_context=args.synthetic_context,
         resume=True, label=f"na_s{args.sample}",
     )
     judge = Judge(n_samples=1)

@@ -122,7 +122,7 @@ def test_map_initial_state_field_mapping():
     assert state["narrative_mode"] is None
     assert state["persist_dir"] == "/tmp/eval"
     assert state["scene_first"] is False  # B-1 parity：与 Production 入口默认一致
-    assert state["deterministic_gate_first"] is False  # B-1 parity
+    assert state["deterministic_gate_first"] is True  # Phase4 消融：默认开启（质量+0.59/CED-0.70/token-59%）
     assert isinstance(state["chapter_number"], int) and state["chapter_number"] >= 1
 
     # previous_context 折叠进 V2 单一载体 context_packet.recent_summary

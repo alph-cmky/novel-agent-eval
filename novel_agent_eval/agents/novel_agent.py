@@ -1,17 +1,16 @@
 # novel_agent_eval/agents/novel_agent.py
 """novel-agent 完整流水线适配器：跑主仓库单章 StateGraph 生成章节。
 
-调用范式对齐主仓库 novel_agent/api/routes.py / sse.py 的真实写法：
+调用范式对齐主仓库 novel_agent/api/sse.py：
 1. build_chapter_graph_async(persist_dir) 编译 graph
-  2. astream_events(initial_state, config, version="v2") 跑流水线
-  3. 跑完 aget_state(config)：next 非空 → 在 human_review interrupt 处暂停
-  4. 评测场景自动 approve：Command(resume={"action": "approve", ...}) 恢复并走完
+2. run_chapter_until_complete 跑流水线（评测自动 approve human_review）
 
 EvalCase → initial_state 字段映射见 _map_initial_state。
 persist_dir 缺省用每次调用的临时目录——注意不能传 ""：虽然 checkpoint 会退化
 为内存 MemorySaver，但主仓库 writer_node 仍会以 {persist_dir}/chroma_data 创建
 ChromaDB PersistentClient，传 "" 会在 cwd 落盘 chroma_data/ 污染仓库。
 """
+
 import hashlib
 import json
 import os
@@ -21,9 +20,9 @@ import time
 import zlib
 from pathlib import Path
 
-from langgraph.types import Command
 from novel_agent.api.run_service import ChapterRunService
 from novel_agent.graph.chapter import build_chapter_graph_async
+from novel_agent.graph.runner import run_chapter_until_complete
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.services.context import ContextCompiler
 from novel_agent.storage.manager import ProjectManager
@@ -109,7 +108,7 @@ class NovelAgentAdapter:
     @staticmethod
     def _truncate_previous_context(context: str, max_chars: int = 1500) -> str:
         """多章连续连载时的智能前文滑动窗口截断。
-        
+
         若前文超过 max_chars（如第 7/8 章累积数万字），只保留首段背景提示 + 最近一章末尾 1200 字，
         防止超长前文挤爆 Prompt 导致注意力稀释与后程字数崩塌。
         """
@@ -248,10 +247,15 @@ class NovelAgentAdapter:
         }
         return GeneratedChapter(content=content, meta=meta)
 
-    def index_chapter(self, *, project_id: str, persist_dir: str, chapter_number: int, content: str) -> None:
+    def index_chapter(
+        self, *, project_id: str, persist_dir: str, chapter_number: int, content: str
+    ) -> None:
         """Persist generated chapter text for subsequent longform retrieval."""
         for (session_dir, external_id), session in self._sessions.items():
-            if session_dir == str(Path(persist_dir).resolve()) and external_id == project_id:
+            if (
+                session_dir == str(Path(persist_dir).resolve())
+                and external_id == project_id
+            ):
                 project_id = session["project_id"]
                 break
         store = ChapterStore(Path(persist_dir) / "chroma_data")
@@ -315,10 +319,19 @@ class NovelAgentAdapter:
         if not packet:
             return None
         return hashlib.sha256(
-            json.dumps(packet, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+            json.dumps(packet, ensure_ascii=False, sort_keys=True, default=str).encode(
+                "utf-8"
+            )
         ).hexdigest()
 
-    _ROLES = ("orchestrator", "writer", "editor", "continuity", "worldbuilding", "evolution")
+    _ROLES = (
+        "orchestrator",
+        "writer",
+        "editor",
+        "continuity",
+        "worldbuilding",
+        "evolution",
+    )
 
     @classmethod
     def _extract_cost_attribution(cls, values: dict) -> dict:
@@ -335,7 +348,9 @@ class NovelAgentAdapter:
                 "output_tokens": int(values.get(f"{role}_output_tokens") or 0),
                 "cached_tokens": int(values.get(f"{role}_cached_tokens") or 0),
                 "reasoning_tokens": int(values.get(f"{role}_reasoning_tokens") or 0),
-                "latency_seconds": round(float(values.get(f"{role}_latency_seconds") or 0.0), 3),
+                "latency_seconds": round(
+                    float(values.get(f"{role}_latency_seconds") or 0.0), 3
+                ),
             }
             attr[role] = entry
         # writer 独有：tool / search 调用（其余角色无工具边界）
@@ -405,10 +420,7 @@ class NovelAgentAdapter:
         return path
 
     @classmethod
-    def _extract_meta(
-        cls,
-        values: dict, elapsed: float
-    ) -> dict:
+    def _extract_meta(cls, values: dict, elapsed: float) -> dict:
         """从最终 state 提取评测信号（供 Task 9 internal_signals）。"""
         history = values.get("evolution_history") or []
         composites = [
@@ -439,7 +451,9 @@ class NovelAgentAdapter:
                 values.get("evolution_best_version"),
             ),
             "editor_overall": (values.get("editor_report") or {}).get("overall_score"),
-            "continuity_overall": (values.get("continuity_report") or {}).get("overall_score"),
+            "continuity_overall": (values.get("continuity_report") or {}).get(
+                "overall_score"
+            ),
             "human_approved": values.get("human_approved"),
             "elapsed_seconds": round(elapsed, 3),
             "workflow_version": "v2",
@@ -471,7 +485,10 @@ class NovelAgentAdapter:
         snapshot_hash = None
         try:
             if ProjectManager is not None:
-                session_key = (str(Path(persist_dir).resolve()), case.project_id or case.name)
+                session_key = (
+                    str(Path(persist_dir).resolve()),
+                    case.project_id or case.name,
+                )
                 session = self._sessions.get(session_key)
                 if session is None:
                     manager = ProjectManager(Path(persist_dir))
@@ -517,9 +534,20 @@ class NovelAgentAdapter:
                         # 唯一约束——评测场景里该章已判失败，清掉 stale run 后重试一次。
                         if "already has an active run" not in str(exc):
                             raise
-                        stale_active = {"queued", "running", "waiting_review", "waiting_user", "retrying"}
-                        for stale in manager.list_writing_runs(project_id, chapter_number):
-                            if stale.get("status") in stale_active and ChapterRunService is not None:
+                        stale_active = {
+                            "queued",
+                            "running",
+                            "waiting_review",
+                            "waiting_user",
+                            "retrying",
+                        }
+                        for stale in manager.list_writing_runs(
+                            project_id, chapter_number
+                        ):
+                            if (
+                                stale.get("status") in stale_active
+                                and ChapterRunService is not None
+                            ):
                                 ChapterRunService(manager).cancel(stale["id"])
                         run = manager.create_writing_run(
                             project_id,
@@ -528,12 +556,14 @@ class NovelAgentAdapter:
                             workflow_version="v2",
                         )
                     session["runs"][chapter_number] = run
-                context_state = ContextCompiler(manager).compile(
-                    project_id, chapter_number
-                ).to_state()
-                snapshot_hash = manager.get_canon_snapshot(
-                    run["input_snapshot_id"]
-                )["content_hash"]
+                context_state = (
+                    ContextCompiler(manager)
+                    .compile(project_id, chapter_number)
+                    .to_state()
+                )
+                snapshot_hash = manager.get_canon_snapshot(run["input_snapshot_id"])[
+                    "content_hash"
+                ]
             else:
                 context_state = {}
             graph = await build_chapter_graph_async(
@@ -553,29 +583,16 @@ class NovelAgentAdapter:
                 initial_state["writing_run_id"] = run["id"]
             config = {
                 "configurable": {
-                    "thread_id": run["id"] if run else f"eval:{case.name}:{self._chapter_number(case)}",
+                    "thread_id": run["id"]
+                    if run
+                    else f"eval:{case.name}:{self._chapter_number(case)}",
                 }
             }
 
             start = time.monotonic()
-
-            async for _ in graph.astream_events(initial_state, config, version="v2"):
-                pass
-
-            final_state = await graph.aget_state(config)
-            # 流水线在 human_review interrupt 处暂停 → 评测场景自动 approve。
-            # while 循环排空所有 interrupt：graph 可能多轮 interrupt（例如
-            # reject→rewrite→再次 human_review），单次 resume 会返回未走完的
-            # state，悄悄污染评测结果。每次 resume 后重新 aget_state，直到 next 为空。
-            while final_state and final_state.next:
-                async for _ in graph.astream_events(
-                    Command(resume={"action": "approve", "comments": ""}),
-                    config,
-                    version="v2",
-                ):
-                    pass
-                final_state = await graph.aget_state(config)
-
+            outcome = await run_chapter_until_complete(
+                graph, initial_state, config=config
+            )
             elapsed = time.monotonic() - start
         finally:
             # 仅关闭当前临时目录专属的 aiosqlite 连接（释放 checkpoints.db 句柄），
@@ -584,6 +601,7 @@ class NovelAgentAdapter:
             db_path = Path(persist_dir) / "checkpoints.db"
             db_key = str(db_path.resolve())
             from novel_agent.graph.chapter import _async_checkpointer_cache
+
             saver = _async_checkpointer_cache.pop(db_key, None)
             if saver and hasattr(saver, "conn") and saver.conn:
                 try:
@@ -593,7 +611,7 @@ class NovelAgentAdapter:
 
         # post-gen DB writes 必须在 persist_dir rmtree 之前：attach_candidate / commit
         # 读写 novel.db，清理过早会让 get_writing_run 返回 None。
-        values = final_state.values if final_state else {}
+        values = outcome.values
         content = (values.get("draft_content") or "").strip()
         # Rule Gate（§3.1 正文非空）：writer 空输出（如 tool 循环耗尽轮次）时
         # 不允许静默返回成功——空章节既不会 commit，也必须以 generation 失败
@@ -627,19 +645,24 @@ class NovelAgentAdapter:
                 for proposal in manager.list_canon_proposals(
                     project_id, run_id=run["id"], status="proposed"
                 ):
-                    manager.review_canon_proposal(proposal["id"], "accepted", "evaluation approval")
+                    manager.review_canon_proposal(
+                        proposal["id"], "accepted", "evaluation approval"
+                    )
                 service.commit(run["id"])
         finally:
             if cleanup:
                 cleanup()
         meta = self._extract_meta(values, elapsed)
         meta["synthetic_context"] = self.synthetic_context
+        meta["trace_id"] = outcome.trace_id
         if run:
-            meta.update({
-                "writing_run_id": run["id"],
-                "project_id": run["project_id"],
-                "context_snapshot_hash": snapshot_hash,
-            })
+            meta.update(
+                {
+                    "writing_run_id": run["id"],
+                    "project_id": run["project_id"],
+                    "context_snapshot_hash": snapshot_hash,
+                }
+            )
         # C-3：Canon 存储增长（本章 commit 后的 DB 状态）
         if manager:
             try:

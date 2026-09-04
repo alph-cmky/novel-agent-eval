@@ -10,6 +10,7 @@ quality-per-cost、evolution gains）→ vault eval-data/。
   uv run python scripts/run_baseline_20ch.py --chapters 20 [--sample 1] [--no-consistency]
   uv run python scripts/run_baseline_20ch.py --chapters 3   # 试跑
 """
+
 import argparse
 import asyncio
 import json
@@ -28,9 +29,9 @@ if _env_path.exists():
         if not _line or _line.startswith("#") or "=" not in _line:
             continue
         _k, _, _v = _line.partition("=")
-        os.environ.setdefault(_k, _v.strip().strip('"').strip("'"))
-os.environ["STEPFUN_API_KEY"] = os.environ.get("OPENAI_API_KEY", "")
-os.environ["STEPFUN_BASE_URL"] = os.environ.get("OPENAI_BASE_URL", "")
+        os.environ[_k] = _v.strip().strip('"').strip("'")
+os.environ.setdefault("STEPFUN_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
+os.environ.setdefault("STEPFUN_BASE_URL", os.environ.get("OPENAI_BASE_URL", ""))
 # Judge/ConStory 与生成模型同 provider：默认跟随 BUDGET_MODEL（E10 也允许 env 显式覆盖）
 os.environ.setdefault(
     "STEPFUN_JUDGE_MODEL", os.environ.get("BUDGET_MODEL", "step-3.7-flash")
@@ -41,7 +42,9 @@ VAULT_EVAL_DATA = pathlib.Path(
 )
 
 # ── 版本化的实验材料（C-1：prompt 变更必须 bump PROMPT_VERSION）──
-PROMPT_VERSION = "baseline50-v1"  # v1: 50章长篇验证（8dim editor + gate78 + gate-first 默认）
+PROMPT_VERSION = (
+    "baseline50-v1"  # v1: 50章长篇验证（8dim editor + gate78 + gate-first 默认）
+)
 STORY_OUTLINE = (
     "《断剑重铸》设定：少年沈舟在剑冢捡到一柄断裂的古剑，剑中封印着上一代剑圣的半魂残识。"
     "为重铸断剑，他拜入天衡剑宗，从外门弟子起步，集齐星髓铁、地心火莲、玄冥铁三味铸剑材料。"
@@ -129,19 +132,51 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--chapters", type=int, default=20)
     parser.add_argument("--sample", type=int, default=1)
-    parser.add_argument("--no-consistency", action="store_true", help="跳过 ConStory（省 API）")
-    parser.add_argument("--max-rounds", type=int, default=0, help="evolution 预算（0=无重写）")
-    parser.add_argument("--v0-gate", type=float, default=78.0, help="v0 门控阈值（>=此分跳过重写，<0 禁用）")
-    parser.add_argument("--scene-first", action="store_true", help="Phase4-A: scene_first=true")
-    parser.add_argument("--gate-first", dest="gate_first", action="store_true", default=True, help="Phase4-B: deterministic_gate_first=true（默认开启，Phase4 证实无质量损失且省 59%% token）")
-    parser.add_argument("--no-gate-first", dest="gate_first", action="store_false", help="关闭 deterministic_gate_first（对照用）")
-    parser.add_argument("--synthetic-context", action="store_true", help="Phase4-C: 仅 previous_context，无结构化叙事状态")
+    parser.add_argument(
+        "--no-consistency", action="store_true", help="跳过 ConStory（省 API）"
+    )
+    parser.add_argument(
+        "--max-rounds", type=int, default=0, help="evolution 预算（0=无重写）"
+    )
+    parser.add_argument(
+        "--v0-gate",
+        type=float,
+        default=78.0,
+        help="v0 门控阈值（>=此分跳过重写，<0 禁用）",
+    )
+    parser.add_argument(
+        "--scene-first", action="store_true", help="Phase4-A: scene_first=true"
+    )
+    parser.add_argument(
+        "--gate-first",
+        dest="gate_first",
+        action="store_true",
+        default=True,
+        help="Phase4-B: deterministic_gate_first=true（默认开启，Phase4 证实无质量损失且省 59%% token）",
+    )
+    parser.add_argument(
+        "--no-gate-first",
+        dest="gate_first",
+        action="store_false",
+        help="关闭 deterministic_gate_first（对照用）",
+    )
+    parser.add_argument(
+        "--synthetic-context",
+        action="store_true",
+        help="Phase4-C: 仅 previous_context，无结构化叙事状态",
+    )
     parser.add_argument("--timeout", type=float, default=900.0, help="单章超时秒")
     args = parser.parse_args()
 
     if not os.environ.get("STEPFUN_API_KEY"):
         print("STEPFUN_API_KEY 未加载", file=sys.stderr)
         sys.exit(1)
+
+    from novel_agent.observability.tracing import require_tracing_config
+
+    tracing_err = require_tracing_config(strict=False)
+    if tracing_err:
+        print(f"[tracing] {tracing_err}；本跑次使用 NullHandle", flush=True)
 
     from novel_agent_eval.agents.novel_agent import NovelAgentAdapter
     from novel_agent_eval.baseline import (
@@ -184,15 +219,20 @@ async def main() -> None:
     # C-1：协议冻结 manifest（commits / dataset hash / config）
     prompt_file = out_dir / "prompts.json"
     prompt_file.write_text(
-        json.dumps({"story_outline": STORY_OUTLINE, "chapter_outlines": CHAPTER_OUTLINES},
-                   ensure_ascii=False, indent=2),
+        json.dumps(
+            {"story_outline": STORY_OUTLINE, "chapter_outlines": CHAPTER_OUTLINES},
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     manifest = build_eval_manifest(cfg, prompt_file)
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"[baseline{args.chapters}] manifest → {out_dir / 'manifest.json'}", flush=True)
+    print(
+        f"[baseline{args.chapters}] manifest → {out_dir / 'manifest.json'}", flush=True
+    )
 
     # 稳定 persist_dir：跨调用 resume 依赖 V2 DB（Project by name）存活，
     # 必须落在输出目录而非临时目录——否则每次重启都会整段重跑。
@@ -200,21 +240,30 @@ async def main() -> None:
     checkpoint = out_dir / "run.checkpoint.json"
 
     adapter = NovelAgentAdapter(
-        max_rounds=args.max_rounds, persist_dir=persist,
+        max_rounds=args.max_rounds,
+        persist_dir=persist,
         v0_gate_score=args.v0_gate if args.max_rounds > 0 else None,
         scene_first=args.scene_first,
         deterministic_gate_first=args.gate_first,
         synthetic_context=args.synthetic_context,
-        resume=True, label=f"na_s{args.sample}",
+        resume=True,
+        label=f"na_s{args.sample}",
     )
     judge = Judge(n_samples=1)
     consistency = None if args.no_consistency else ConStoryCheckerAdapter()
 
-    cases = [_case(ch, args.sample, args.chapters) for ch in range(1, args.chapters + 1)]
+    cases = [
+        _case(ch, args.sample, args.chapters) for ch in range(1, args.chapters + 1)
+    ]
     result: BaselineRunResult = await run_baseline(
-        adapter=adapter, judge=judge, cases=cases,
-        persist_dir=persist, checkpoint_path=checkpoint,
-        consistency_checker=consistency, resume=True, chapter_timeout=args.timeout,
+        adapter=adapter,
+        judge=judge,
+        cases=cases,
+        persist_dir=persist,
+        checkpoint_path=checkpoint,
+        consistency_checker=consistency,
+        resume=True,
+        chapter_timeout=args.timeout,
         sample_index=args.sample,
     )
 
@@ -233,10 +282,13 @@ async def main() -> None:
             "censorship_rate": result.censorship_rate,
         },
         "quality": {
-            "mean": result.quality_mean, "std": result.quality_std,
-            "first": result.first_window_score, "middle": result.middle_window_score,
+            "mean": result.quality_mean,
+            "std": result.quality_std,
+            "first": result.first_window_score,
+            "middle": result.middle_window_score,
             "last": result.last_window_score,
-            "degradation": result.degradation, "trend_slope": result.trend_slope,
+            "degradation": result.degradation,
+            "trend_slope": result.trend_slope,
             "segments": result.segment_stats(window=5),
         },
         "consistency": {
@@ -255,8 +307,11 @@ async def main() -> None:
         "context": {
             "context_growth_slope_chars": result.context_growth_slope,
             "per_chapter": [
-                {"chapter": c.chapter_number, "context_sizes": c.context_sizes,
-                 "canon_counts": c.canon_counts}
+                {
+                    "chapter": c.chapter_number,
+                    "context_sizes": c.context_sizes,
+                    "canon_counts": c.canon_counts,
+                }
                 for c in result.chapters
             ],
         },
@@ -264,42 +319,61 @@ async def main() -> None:
             "gain_per_revision": result.evolution_gain_per_revision(),
             "paths": [
                 {"chapter": c.chapter_number, "path": c.evolution_path}
-                for c in result.chapters if c.evolution_path
+                for c in result.chapters
+                if c.evolution_path
             ],
         },
         "quality_per_cost": result.quality_per_cost,
         "chapters": [
             {
-                "chapter": c.chapter_number, "status": c.status,
-                "overall": c.overall, "dimensions": c.dimensions,
+                "chapter": c.chapter_number,
+                "status": c.status,
+                "overall": c.overall,
+                "dimensions": c.dimensions,
                 "judge_status": c.judge_status,
                 "consistency_errors": c.consistency_errors,
                 "consistency_failed_categories": c.consistency_failed_categories,
                 "ground_truth": c.ground_truth,
                 "tokens_raw": c.token_usage.get("total_tokens"),
                 "latency_seconds": c.latency_seconds,
-                "failure_stage": c.failure_stage, "failure_reason": c.failure_reason,
+                "failure_stage": c.failure_stage,
+                "failure_reason": c.failure_reason,
             }
             for c in result.chapters
         ],
         "go_no_go": go_no_go_gates([result]),
     }
     out_path = out_dir / "baseline_result.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     (out_dir / "run.log").write_text(
         json.dumps(report["reliability"], ensure_ascii=False), encoding="utf-8"
     )
 
     print(f"\n=== {run_tag} ===", flush=True)
-    print(f"completed={result.completed_chapters}/{result.expected_chapters} "
-          f"quality_mean={result.quality_mean}±{result.quality_std} "
-          f"degradation={result.degradation} ced={result.ced}", flush=True)
-    print(f"tokens_raw_total={result.total_tokens} "
-          f"latency/ch={result.latency_per_chapter}s", flush=True)
+    print(
+        f"completed={result.completed_chapters}/{result.expected_chapters} "
+        f"quality_mean={result.quality_mean}±{result.quality_std} "
+        f"degradation={result.degradation} ced={result.ced}",
+        flush=True,
+    )
+    print(
+        f"tokens_raw_total={result.total_tokens} "
+        f"latency/ch={result.latency_per_chapter}s",
+        flush=True,
+    )
     print(f"go/no-go: {report['go_no_go']}", flush=True)
     print(f"saved → {out_path}", flush=True)
+    from novel_agent_eval.human_review import export_run_chapters
+
+    n_md = export_run_chapters(out_dir)
+    print(f"chapters md → {out_dir / 'chapters'} ({n_md})", flush=True)
 
     from novel_agent.graph.chapter import aclose_checkpointers
+    from novel_agent.observability.tracing import flush_tracing
+
+    flush_tracing()
     await aclose_checkpointers()
 
 

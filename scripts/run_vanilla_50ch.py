@@ -15,6 +15,7 @@ memory_mode：
   uv run python scripts/run_vanilla_50ch.py --chapters 50
   uv run python scripts/run_vanilla_50ch.py --chapters 20 --memory-mode full
 """
+
 import argparse
 import asyncio
 import json
@@ -32,7 +33,9 @@ if _env_path.exists():
         os.environ[_k] = _v.strip().strip('"').strip("'")
 os.environ.setdefault("STEPFUN_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
 os.environ.setdefault("STEPFUN_BASE_URL", os.environ.get("OPENAI_BASE_URL", ""))
-os.environ.setdefault("STEPFUN_JUDGE_MODEL", os.environ.get("BUDGET_MODEL", "deepseek-v4-flash"))
+os.environ.setdefault(
+    "STEPFUN_JUDGE_MODEL", os.environ.get("BUDGET_MODEL", "deepseek-v4-flash")
+)
 
 VAULT_EVAL_DATA = pathlib.Path(
     "/Users/gaoyinrun/Documents/Obsidian Vault/novel-agent/eval-data"
@@ -75,7 +78,9 @@ async def main() -> None:
         # 缺省复用 QUALITY_*（与 NovelAgent 同生成模型/凭证）
         os.environ["BASELINE_API_KEY"] = os.environ.get("QUALITY_API_KEY", "")
         os.environ["BASELINE_BASE_URL"] = os.environ.get("QUALITY_BASE_URL", "")
-        os.environ.setdefault("BASELINE_MODEL", os.environ.get("QUALITY_MODEL", "deepseek-v4-flash"))
+        os.environ.setdefault(
+            "BASELINE_MODEL", os.environ.get("QUALITY_MODEL", "deepseek-v4-flash")
+        )
 
     from novel_agent_eval.agents.vanilla_llm import VanillaLLMAdapter
     from novel_agent_eval.baseline import go_no_go_gates, run_baseline
@@ -100,12 +105,19 @@ async def main() -> None:
     judge = Judge(n_samples=1)
     consistency = None if args.no_consistency else ConStoryCheckerAdapter()
 
-    cases = [_case(ch, args.sample, args.chapters) for ch in range(1, args.chapters + 1)]
+    cases = [
+        _case(ch, args.sample, args.chapters) for ch in range(1, args.chapters + 1)
+    ]
     result = await run_baseline(
-        adapter=adapter, judge=judge, cases=cases,
-        persist_dir=persist, checkpoint_path=checkpoint,
-        consistency_checker=consistency, resume=True,
-        chapter_timeout=args.timeout, sample_index=args.sample,
+        adapter=adapter,
+        judge=judge,
+        cases=cases,
+        persist_dir=persist,
+        checkpoint_path=checkpoint,
+        consistency_checker=consistency,
+        resume=True,
+        chapter_timeout=args.timeout,
+        sample_index=args.sample,
     )
 
     report = {
@@ -123,10 +135,13 @@ async def main() -> None:
             "censorship_rate": result.censorship_rate,
         },
         "quality": {
-            "mean": result.quality_mean, "std": result.quality_std,
-            "first": result.first_window_score, "middle": result.middle_window_score,
+            "mean": result.quality_mean,
+            "std": result.quality_std,
+            "first": result.first_window_score,
+            "middle": result.middle_window_score,
             "last": result.last_window_score,
-            "degradation": result.degradation, "trend_slope": result.trend_slope,
+            "degradation": result.degradation,
+            "trend_slope": result.trend_slope,
             "segments": result.segment_stats(window=5) if args.chapters == 20 else None,
         },
         "consistency": {
@@ -143,32 +158,50 @@ async def main() -> None:
         "quality_per_cost": result.quality_per_cost,
         "chapters": [
             {
-                "chapter": c.chapter_number, "status": c.status,
-                "overall": c.overall, "dimensions": c.dimensions,
+                "chapter": c.chapter_number,
+                "status": c.status,
+                "overall": c.overall,
+                "dimensions": c.dimensions,
                 "judge_status": c.judge_status,
                 "consistency_errors": c.consistency_errors,
                 "ground_truth": c.ground_truth,
                 "tokens_raw": c.token_usage.get("total_tokens"),
                 "latency_seconds": c.latency_seconds,
-                "failure_stage": c.failure_stage, "failure_reason": c.failure_reason,
+                "failure_stage": c.failure_stage,
+                "failure_reason": c.failure_reason,
             }
             for c in result.chapters
         ],
         "go_no_go": go_no_go_gates([result]),
     }
     out_path = out_dir / "baseline_result.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     print(f"\n=== {run_tag} ===", flush=True)
-    print(f"completed={result.completed_chapters}/{result.expected_chapters} "
-          f"quality_mean={result.quality_mean}±{result.quality_std} "
-          f"degradation={result.degradation} ced={result.ced}", flush=True)
-    print(f"tokens_raw_total={result.total_tokens} "
-          f"latency/ch={result.latency_per_chapter}s", flush=True)
+    print(
+        f"completed={result.completed_chapters}/{result.expected_chapters} "
+        f"quality_mean={result.quality_mean}±{result.quality_std} "
+        f"degradation={result.degradation} ced={result.ced}",
+        flush=True,
+    )
+    print(
+        f"tokens_raw_total={result.total_tokens} "
+        f"latency/ch={result.latency_per_chapter}s",
+        flush=True,
+    )
     print(f"go/no-go: {report['go_no_go']}", flush=True)
     print(f"saved → {out_path}", flush=True)
+    from novel_agent_eval.human_review import export_run_chapters
+
+    n_md = export_run_chapters(out_dir)
+    print(f"chapters md → {out_dir / 'chapters'} ({n_md})", flush=True)
 
     from novel_agent.graph.chapter import aclose_checkpointers
+    from novel_agent.observability.tracing import flush_tracing
+
+    flush_tracing()
     await aclose_checkpointers()
 
 

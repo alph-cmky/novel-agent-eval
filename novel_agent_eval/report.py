@@ -68,7 +68,7 @@ def _md_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def render_scorecard(report: BenchmarkReport) -> str:
+def render_scorecard(report: BenchmarkReport, calibration: dict | None = None) -> str:
     """渲染完整跑分卡 Markdown。总分聚合复用 BenchmarkRunner.compare。"""
     comp = BenchmarkRunner.compare(report.results)
     sections: list[str] = []
@@ -172,10 +172,40 @@ def render_scorecard(report: BenchmarkReport) -> str:
     sections.append("")
     sections.append("### Judge 校准记录")
     sections.append("")
-    sections.append("待采集（需人工盲测 ground truth）")
+    sections.append(_render_calibration(calibration))
 
     sections.append("")
     return "\n".join(sections)
+
+
+def _render_calibration(calibration: dict | None) -> str:
+    if not calibration:
+        return (
+            "未提供 `human_scores.json`。"
+            "导出章节后用 `uv run python scripts/blind_review.py --run-dir <run>` 盲测。"
+        )
+    n = calibration.get("n_paired", 0)
+    mean_k = calibration.get("mean_kappa")
+    mean_cell = f"{mean_k:.3f}" if isinstance(mean_k, (int, float)) else "—"
+    lines = [
+        (
+            f"配对章数 **{n}**；盲测 `{calibration.get('blind', True)}`；"
+            f"看见 Judge `{calibration.get('saw_judge', False)}`；"
+            f"rater `{calibration.get('rater_id') or '—'}`；"
+            f"5 档 quadratic weighted kappa 均值 **{mean_cell}**。"
+        ),
+        "",
+    ]
+    dims = calibration.get("dimensions") or {}
+    rows = []
+    for dim in QUALITY_DIMS:
+        value = dims.get(dim)
+        rows.append([
+            DIM_LABELS.get(dim, dim),
+            f"{value:.3f}" if isinstance(value, (int, float)) else "—",
+        ])
+    lines.append(_md_table(["维度", "κ"], rows))
+    return "\n".join(lines)
 
 
 def render_ablation(ablation: dict[str, BenchmarkResult]) -> str:

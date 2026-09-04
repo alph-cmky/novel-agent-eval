@@ -41,14 +41,15 @@ VAULT_EVAL_DATA = pathlib.Path(
 )
 
 # ── 版本化的实验材料（C-1：prompt 变更必须 bump PROMPT_VERSION）──
-PROMPT_VERSION = "baseline20-v2"  # v2: editor 8维对齐 Judge (P0-B)
+PROMPT_VERSION = "baseline50-v1"  # v1: 50章长篇验证（8dim editor + gate78 + gate-first 默认）
 STORY_OUTLINE = (
-    "《断剑重铸》设定：少年沈舟在剑冢捡到一柄断裂的古剑，剑中封印着上一代剑圣的残魂。"
-    "为重铸断剑，他拜入天衡剑宗，从外门弟子起步。全书写他三年内集齐三味铸剑材料、"
-    "在宗门大比上一鸣惊人，并揭开古剑与剑宗祖师的前世渊源。"
+    "《断剑重铸》设定：少年沈舟在剑冢捡到一柄断裂的古剑，剑中封印着上一代剑圣的半魂残识。"
+    "为重铸断剑，他拜入天衡剑宗，从外门弟子起步，集齐星髓铁、地心火莲、玄冥铁三味铸剑材料。"
+    "过程中揭开古剑与剑宗祖师的前世渊源：祖师为封印魔渊自断剑心，以魔渊核心铸成人形「活印」苏晚晴为锁。"
+    "沈舟深入魔渊寻玄冥铁，遭魔君残识阻挠，与黑袍人首徒解开心结，最终重铸断剑、将魔渊永镇剑中，了结千年恩怨。"
 )
 
-# 20 章逐章大纲（三幕：1-5 崭露头角 / 6-14 历练与暗流 / 15-20 大比与真相）
+# 逐章大纲：三卷（1-20 崭露与历练 / 21-38 魔渊深入与真相 / 39-50 重铸与决战）
 CHAPTER_OUTLINES: dict[int, str] = {
     1: "沈舟在剑冢捡到断剑，剑中残魂苏醒，警告他三日内须以血契认主，否则剑灵消散。",
     2: "沈舟拜入天衡剑宗外门，因断剑被同门嘲笑；夜里残魂教他第一式「引星」，初窥剑气。",
@@ -70,20 +71,57 @@ CHAPTER_OUTLINES: dict[int, str] = {
     18: "残魂失控引祖师封印共鸣，黑袍人现身夺剑；沈舟以本心唤回残魂，合力退敌。",
     19: "真相揭开：祖师为封印魔渊自断剑心，首徒盗剑实为复活师尊；三味材料只差最后一味。",
     20: "第三味材料线索指向魔渊深处；沈舟接下祖师传承，立誓重铸断剑、了结千年恩怨。",
+    21: "沈舟深入魔渊外围，残魂感应到第三味材料「玄冥铁」的气息；魔渊瘴气侵蚀经脉，他以剑气护体强撑。",
+    22: "魔渊入口遇苏晚晴率巡查队拦阻；她奉宗主之命押沈舟回宗，二人争执间遭遇魔物突袭。",
+    23: "联手退魔物后，苏晚晴暗中转交一枚可避瘴气的「避魔珠」，暗示宗主对魔渊另有安排。",
+    24: "沈舟潜入魔渊第一层，见无数封魔石碑；残魂触碑生异变，忆起当年祖师封印之战片段。",
+    25: "碑林深处藏有祖师手刻剑痕，残魂指点沈舟参悟，习得专门克制魔气的「镇魔剑意」。",
+    26: "魔渊守将发现入侵者，率魔兵围剿；沈舟凭镇魔剑意杀出重围，向第二层坠落。",
+    27: "第二层是废弃的铸剑古墟，遍地断剑残骸；沈舟惊觉此地正是当年祖师铸剑之处。",
+    28: "古墟核心藏半部铸剑秘录，记载「玄冥铁」需以持剑人精血浇铸方可驯服；沈舟心神震动。",
+    29: "黑袍人现身古墟，揭露当年真相：祖师铸剑为镇魔，却在最后一步遭魔君残识反噬、剑心俱裂。",
+    30: "黑袍人坦言盗剑非为复活师尊，而是防止断剑落入魔君之手；二人暂时休战，约定合力寻玄冥铁。",
+    31: "魔渊第三层现玄冥铁矿脉，矿脉受魔君残识守护，采铁必先破其护矿魔阵。",
+    32: "破阵之法需祖师镇魔剑意配合血契；黑袍人护法，沈舟以残魂为引，开始强行采炼玄冥铁。",
+    33: "采炼至半，魔君残识借矿脉反扑，黑袍人重伤；残魂被迫现身硬撼魔君残识，境界不稳。",
+    34: "危急关头苏晚晴赶到，她掌心浮现魔纹，竟能驱散魔君残识——她的血脉与魔渊本源相连。",
+    35: "苏晚晴救下众人，却因动用魔纹遭反噬昏厥；沈舟从秘录残页推断：她是祖师当年以魔渊核心封印铸成的人形「活印」。",
+    36: "带苏晚晴回宗求医，宗主却避而不见；藏经阁老阁主道出：苏晚晴实为祖师以自身剑心血肉孕养的封印载体。",
+    37: "老阁主授沈舟「唤心诀」，可唤醒苏晚晴沉睡的自我意识，让她摆脱「活印」的宿命。",
+    38: "沈舟日日以唤心诀助苏晚晴，二人情愫渐深；魔渊封印却因玄冥铁被采而松动，魔气外泄。",
+    39: "宗主被迫现身，坦言当年祖师以命铸印、以苏晚晴为印锁，如今印锁将崩，要么牺牲苏晚晴重封，要么彻底封印魔渊。",
+    40: "沈舟抉择：他拒绝牺牲苏晚晴，决定以重铸后的断剑为全新封印核心，将魔渊永镇剑中。",
+    41: "重铸玄冥铁需天火，沈舟携玄冥铁再赴火域秘境；残魂传授最后的心法「剑我合一」。",
+    42: "火域深处，沈舟以血契精血浇铸玄冥铁，三味材料初聚；断剑剑胚成型，残魂却因耗损过度开始消散。",
+    43: "残魂弥留之际道出：自己正是祖师当年分出的半魂，守护断剑千年只为等今日之选；沈舟嚎啕大恸。",
+    44: "黑袍人携祖师遗骨前来，以秘法稳住残魂不散；真相大白：首徒一生执念是还清当年未能护住师尊的愧。",
+    45: "魔君残识趁断剑未成，引魔渊大军倾巢而出；天衡剑宗与各派联军死守魔渊谷口。",
+    46: "大战惨烈，宗主以命封堵第一波魔潮；苏晚晴血脉彻底觉醒，化身「活印」现形与魔君残识对峙。",
+    47: "沈舟抱断剑剑胚冲入战阵，唤心诀唤醒苏晚晴自我，她自愿将印锁之力渡入断剑，助其完成最后一步。",
+    48: "断剑重铸功成，沈舟以「剑我合一」驾驭新剑，魔君残识被封入剑中；千年恩怨在此一剑了结。",
+    49: "大战终歇，魔渊封印重塑；黑袍人卸下执念，将祖师遗骨葬回剑冢，转身云游四方。",
+    50: "沈舟与苏晚晴携手重铸剑宗，断剑镇魔渊永世；剑冢残碑上，沈舟亲手刻下祖师与首徒之名。",
 }
 
 
-def _case(ch: int, sample: int) -> "EvalCase":
+def _case(ch: int, sample: int, chapters: int) -> "EvalCase":
     from novel_agent_eval.dataset.schema import EvalCase
 
+    # stage 三档：opening 前 25% / long 后 25% / 其余 middle
+    if ch <= max(1, round(chapters * 0.25)):
+        stage = "opening"
+    elif ch > chapters - round(chapters * 0.25):
+        stage = "long"
+    else:
+        stage = "middle"
     return EvalCase(
-        name=f"baseline20_s{sample}_ch{ch:02d}",
-        stage="opening" if ch <= 5 else ("middle" if ch <= 14 else "long"),
+        name=f"baseline{chapters}_s{sample}_ch{ch:02d}",
+        stage=stage,
         story_outline=STORY_OUTLINE,
         previous_context="",  # 留空：前文一律由 V2 DB Canon 经 ContextCompiler 提供
         target_chapter_outline=CHAPTER_OUTLINES[ch],
         word_target=3000,
-        project_id=f"baseline20_s{sample}",
+        project_id=f"baseline{chapters}_s{sample}",
     )
 
 
@@ -139,7 +177,7 @@ async def main() -> None:
         phase_tag += "_gate1"
     if args.synthetic_context:
         phase_tag += "_synctx"
-    run_tag = f"baseline20_{args.chapters}ch_s{args.sample}_r{args.max_rounds}_{model_tag}{phase_tag}"
+    run_tag = f"baseline{args.chapters}_{args.chapters}ch_s{args.sample}_r{args.max_rounds}_{model_tag}{phase_tag}"
     out_dir = VAULT_EVAL_DATA / run_tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -154,7 +192,7 @@ async def main() -> None:
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"[baseline20] manifest → {out_dir / 'manifest.json'}", flush=True)
+    print(f"[baseline{args.chapters}] manifest → {out_dir / 'manifest.json'}", flush=True)
 
     # 稳定 persist_dir：跨调用 resume 依赖 V2 DB（Project by name）存活，
     # 必须落在输出目录而非临时目录——否则每次重启都会整段重跑。
@@ -172,7 +210,7 @@ async def main() -> None:
     judge = Judge(n_samples=1)
     consistency = None if args.no_consistency else ConStoryCheckerAdapter()
 
-    cases = [_case(ch, args.sample) for ch in range(1, args.chapters + 1)]
+    cases = [_case(ch, args.sample, args.chapters) for ch in range(1, args.chapters + 1)]
     result: BaselineRunResult = await run_baseline(
         adapter=adapter, judge=judge, cases=cases,
         persist_dir=persist, checkpoint_path=checkpoint,

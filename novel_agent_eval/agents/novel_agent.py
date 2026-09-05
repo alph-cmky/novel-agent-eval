@@ -1,14 +1,12 @@
 # novel_agent_eval/agents/novel_agent.py
-"""novel-agent 完整流水线适配器：跑主仓库单章 StateGraph 生成章节。
+"""novel-agent 适配器：跑主仓库 C5 agent loop 生成章节。
 
-调用范式对齐主仓库 novel_agent/api/sse.py：
-1. build_chapter_graph_async(persist_dir) 编译 graph
-2. run_chapter_until_complete 跑流水线（评测自动 approve human_review）
+调用范式：
+1. run_agent_loop(initial_state) 跑 Orchestrator → Writer loop → Editor → Continuity → Worldbuilding
+2. 评测自动 approve human_review（loop 内无人审 interrupt）
 
 EvalCase → initial_state 字段映射见 _map_initial_state。
-persist_dir 缺省用每次调用的临时目录——注意不能传 ""：虽然 checkpoint 会退化
-为内存 MemorySaver，但主仓库 writer_node 仍会以 {persist_dir}/chroma_data 创建
-ChromaDB PersistentClient，传 "" 会在 cwd 落盘 chroma_data/ 污染仓库。
+persist_dir 缺省用每次调用的临时目录——不能传 ""，否则 ChromaDB 会在 cwd 落盘。
 """
 
 import hashlib
@@ -21,8 +19,7 @@ import zlib
 from pathlib import Path
 
 from novel_agent.api.run_service import ChapterRunService
-from novel_agent.graph.chapter import build_chapter_graph_async
-from novel_agent.graph.runner import run_chapter_until_complete
+from novel_agent.graph.agent_loop import run_agent_loop
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.services.context import ContextCompiler
 from novel_agent.storage.manager import ProjectManager
@@ -144,22 +141,9 @@ class NovelAgentAdapter:
             "narrative_perspective": case.narrative_perspective or "",
             "context_packet": self._eval_context_packet(case, chapter_number),
             "persist_dir": case.persist_dir or persist_dir,
-            "scene_first": self.scene_first,
-            "deterministic_gate_first": self.deterministic_gate_first,
         }
-        if self.max_rounds is not None:
-            state["evolution_max_rounds"] = self.max_rounds
-        if self.v0_gate_score is not None:
-            state["evolution_v0_gate_score"] = self.v0_gate_score
         if self.skip_orchestrator:
             state["skip_orchestrator"] = True
-        if self.skip_reviews:
-            state["skip_reviews"] = True
-        if self.skip_worldbuilding:
-            state["skip_worldbuilding"] = True
-        state["review_interval"] = self.review_interval
-        if self.skip_evolution_enrichment:
-            state["skip_evolution_enrichment"] = True
         return state
 
     def _eval_context_packet(self, case: EvalCase, chapter_number: int) -> dict:
@@ -478,8 +462,6 @@ class NovelAgentAdapter:
             persist_dir = tempfile.mkdtemp(prefix="novel_eval_")
             cleanup = lambda: _rmtree(persist_dir)
 
-        graph = None
-        final_state = None
         manager = None
         run = None
         snapshot_hash = None
@@ -566,9 +548,6 @@ class NovelAgentAdapter:
                 ]
             else:
                 context_state = {}
-            graph = await build_chapter_graph_async(
-                persist_dir=persist_dir,
-            )
             initial_state = self._map_initial_state(case, persist_dir)
             # B-3 单一上下文契约：DB 投影（Production memory）默认优先；
             # synthetic_context=True 时反转（显式标记的 harness-context benchmark）。
@@ -581,37 +560,15 @@ class NovelAgentAdapter:
             if run:
                 initial_state["project_id"] = project_id
                 initial_state["writing_run_id"] = run["id"]
-            config = {
-                "configurable": {
-                    "thread_id": run["id"]
-                    if run
-                    else f"eval:{case.name}:{self._chapter_number(case)}",
-                }
-            }
 
             start = time.monotonic()
-            outcome = await run_chapter_until_complete(
-                graph, initial_state, config=config
-            )
+            values = await run_agent_loop(initial_state)
             elapsed = time.monotonic() - start
         finally:
-            # 仅关闭当前临时目录专属的 aiosqlite 连接（释放 checkpoints.db 句柄），
-            # 不影响其他并发协程的缓存连接。rmtree 推迟到 post-gen 写库之后，
-            # 否则 novel.db 被连临时目录一起删，attach_candidate 会 Run not found。
-            db_path = Path(persist_dir) / "checkpoints.db"
-            db_key = str(db_path.resolve())
-            from novel_agent.graph.chapter import _async_checkpointer_cache
-
-            saver = _async_checkpointer_cache.pop(db_key, None)
-            if saver and hasattr(saver, "conn") and saver.conn:
-                try:
-                    await saver.conn.close()
-                except Exception:  # noqa: BLE001, S110 - cleanup must not mask generation errors
-                    pass
+            pass
 
         # post-gen DB writes 必须在 persist_dir rmtree 之前：attach_candidate / commit
         # 读写 novel.db，清理过早会让 get_writing_run 返回 None。
-        values = outcome.values
         content = (values.get("draft_content") or "").strip()
         # Rule Gate（§3.1 正文非空）：writer 空输出（如 tool 循环耗尽轮次）时
         # 不允许静默返回成功——空章节既不会 commit，也必须以 generation 失败
@@ -654,7 +611,6 @@ class NovelAgentAdapter:
                 cleanup()
         meta = self._extract_meta(values, elapsed)
         meta["synthetic_context"] = self.synthetic_context
-        meta["trace_id"] = outcome.trace_id
         if run:
             meta.update(
                 {

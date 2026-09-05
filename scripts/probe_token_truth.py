@@ -141,7 +141,7 @@ async def exp2_writer_call() -> None:
         input_schema = SearchSchema
 
         async def execute(self, **kwargs) -> ToolResult:
-            return ToolResult(success=True, data={"result": "前文：主角在山门外捡到断剑。"})
+            return ToolResult(success=True, data={"result": "前文：裴照晚上任被砸上方绣案，当众拒签。"})
 
     orig_call_model = base_mod.BaseAgent.call_model
 
@@ -164,7 +164,7 @@ async def exp2_writer_call() -> None:
         ))
         agent.register_tool(DummyTool())
         content, _ = await agent.write(
-            chapter_number=run, outline="主角在剑冢捡到断剑，残魂苏醒警告三日内血契认主。",
+            chapter_number=run, outline="上任第一日，老吏把方绣案连同今日结案朱批塞过来；裴照晚只问人呢炉呢供状呢。",
             context_packet={"recent_summary": "前文提要：" + cjk_prompt(800)},
             target_chapter_words=300,
         )
@@ -224,9 +224,10 @@ async def exp3_full_chapter() -> None:
     case = EvalCase(
         name="token_probe_ch01",
         stage="opening",
-        story_outline="《断剑重铸》：少年沈舟在剑冢捡到断剑，剑中封印上一代剑圣残魂。",
+        genre="女主无CP",
+        story_outline="《无祀录》：裴照晚上任被砸上方绣案，限当日结案；她不结，当众拒签。",
         previous_context="",
-        target_chapter_outline="沈舟捡到断剑，残魂苏醒，警告三日内血契认主。",
+        target_chapter_outline="上任第一日，老吏把方绣案连同今日结案朱批塞过来；裴照晚只问：人呢，炉呢，供状呢。",
         word_target=600,
         project_id="token_probe",
     )

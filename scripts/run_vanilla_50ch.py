@@ -42,7 +42,7 @@ VAULT_EVAL_DATA = pathlib.Path(
 )
 
 # 与 run_baseline_20ch.py 保持同一份实验材料（大纲/大纲版本）
-from run_baseline_20ch import CHAPTER_OUTLINES, STORY_OUTLINE  # noqa: E402
+from run_baseline_20ch import CHAPTER_OUTLINES, PROMPT_VERSION, STORY_OUTLINE  # noqa: E402
 
 
 def _case(ch: int, sample: int, chapters: int):
@@ -57,6 +57,7 @@ def _case(ch: int, sample: int, chapters: int):
     return EvalCase(
         name=f"baseline{chapters}_s{sample}_ch{ch:02d}",
         stage=stage,
+        genre="女主无CP",
         story_outline=STORY_OUTLINE,
         previous_context="",
         target_chapter_outline=CHAPTER_OUTLINES[ch],
@@ -87,9 +88,11 @@ async def main() -> None:
     from novel_agent_eval.constory import ConStoryCheckerAdapter
     from novel_agent_eval.judge import Judge
 
+    pv_tag = PROMPT_VERSION.rsplit("-", 1)[-1]
     run_tag = (
         f"vanilla{args.chapters}_{args.chapters}ch_s{args.sample}"
         f"_{args.memory_mode}_{os.environ.get('BASELINE_MODEL', 'unknown').lower().replace('.', '-')}"
+        f"_{pv_tag}"
     )
     out_dir = VAULT_EVAL_DATA / run_tag
     out_dir.mkdir(parents=True, exist_ok=True)

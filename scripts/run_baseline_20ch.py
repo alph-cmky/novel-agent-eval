@@ -42,9 +42,7 @@ VAULT_EVAL_DATA = pathlib.Path(
 )
 
 # ── 版本化的实验材料（C-1：prompt 变更必须 bump PROMPT_VERSION）──
-PROMPT_VERSION = (
-    "baseline50-v3"  # v3: 《无祀录》章纲改场面化，压公文腔
-)
+PROMPT_VERSION = "baseline50-v3"  # v3: 《无祀录》章纲改场面化，压公文腔
 STORY_OUTLINE = (
     "《无祀录》：北冕靠「记名入祀」收灵，除了名就像从人间蒸发。太常寺除籍司专干这脏活，"
     "除籍官三戒——不得结契、不得收徒、不得立私人香火；新官第一天必须办一桩「干净案子」证明无私。"
@@ -250,13 +248,9 @@ async def main() -> None:
     checkpoint = out_dir / "run.checkpoint.json"
 
     adapter = NovelAgentAdapter(
-        max_rounds=args.max_rounds,
         persist_dir=persist,
-        v0_gate_score=args.v0_gate if args.max_rounds > 0 else None,
-        scene_first=args.scene_first,
-        deterministic_gate_first=args.gate_first,
-        synthetic_context=args.synthetic_context,
         resume=True,
+        synthetic_context=args.synthetic_context,
         label=f"na_s{args.sample}",
     )
     judge = Judge(n_samples=1)
@@ -380,11 +374,9 @@ async def main() -> None:
     n_md = export_run_chapters(out_dir)
     print(f"chapters md → {out_dir / 'chapters'} ({n_md})", flush=True)
 
-    from novel_agent.graph.chapter import aclose_checkpointers
     from novel_agent.observability.tracing import flush_tracing
 
     flush_tracing()
-    await aclose_checkpointers()
 
 
 if __name__ == "__main__":

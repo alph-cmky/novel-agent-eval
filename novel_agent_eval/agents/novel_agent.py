@@ -44,32 +44,14 @@ class NovelAgentAdapter:
     def __init__(
         self,
         persist_dir: str | None = None,
-        max_rounds: int | None = None,
         label: str | None = None,
         skip_orchestrator: bool = False,
-        skip_reviews: bool = False,
-        skip_worldbuilding: bool = False,
-        review_interval: int = 1,
-        skip_evolution_enrichment: bool = False,
-        scene_first: bool = False,
-        deterministic_gate_first: bool = True,
-        v0_gate_score: float | None = 78.0,
         resume: bool = False,
         project_id: str = "",
         synthetic_context: bool = False,
     ):
-        self.max_rounds = max_rounds
-        self.v0_gate_score = v0_gate_score
         self.skip_orchestrator = skip_orchestrator
-        self.skip_reviews = skip_reviews
-        self.skip_worldbuilding = skip_worldbuilding
-        self.review_interval = max(review_interval, 1)
-        self.skip_evolution_enrichment = skip_evolution_enrichment
         # B-1 parity：默认值与主仓库 API 入口 initial_state（routes.py:636-650）一致
-        # —— scene_first=False；deterministic_gate_first=True（Phase4 消融证实：
-        # 硬门通过跳过 LLM Reviewer 质量 +0.59、CED -0.70、token -59%）。
-        self.scene_first = scene_first
-        self.deterministic_gate_first = deterministic_gate_first
         # resume=True：跨进程恢复——按 name 复用已有 Project，已 approved 章节不重生。
         # V2 durable state（Project/ChapterVersion/Canon）即真相源，不依赖 eval 侧 checkpoint。
         self.resume = resume

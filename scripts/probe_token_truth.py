@@ -141,7 +141,7 @@ async def exp2_writer_call() -> None:
         input_schema = SearchSchema
 
         async def execute(self, **kwargs) -> ToolResult:
-            return ToolResult(success=True, data={"result": "前文：苏迟考公上岸，报到地点是城中村铺面，前任留了张纸条人已经跑了。"})
+            return ToolResult(success=True, data={"result": "前文：苏迟考公上岸，报到地点是城中村铺面，前任留了张纸条人已经跑了，她把纸条贴门口当免责声明。"})
 
     orig_call_model = base_mod.BaseAgent.call_model
 
@@ -164,7 +164,7 @@ async def exp2_writer_call() -> None:
         ))
         agent.register_tool(DummyTool())
         content, _ = await agent.write(
-            chapter_number=run, outline="苏迟考公上岸，报到地点是城中村铺面，前任留了张纸条「别接龙王单，别惹孟婆，别信月老」，人已经跑了。",
+            chapter_number=run, outline="苏迟考公上岸，报到地点是城中村铺面，门牌写「天庭驻人间办事处」被邻居当算命馆。前任留了张纸条「别接龙王单，别惹孟婆，别信月老，别问第十八任去哪了」，人已经跑了。她把纸条贴在门口当免责声明。",
             context_packet={"recent_summary": "前文提要：" + cjk_prompt(800)},
             target_chapter_words=300,
         )
@@ -225,9 +225,9 @@ async def exp3_full_chapter() -> None:
         name="token_probe_ch01",
         stage="opening",
         genre="女主无CP",
-        story_outline="《神仙也得走流程》：苏迟考公上岸，岗位是天庭驻人间办事处综合岗，编制在天庭办公在城中村。",
+        story_outline="《神仙也得走流程》：苏迟考公上岸，岗位是天庭驻人间办事处综合岗，编制在天庭办公在城中村，门口被当算命馆。",
         previous_context="",
-        target_chapter_outline="苏迟考公上岸，报到地点是城中村铺面，前任留了张纸条「别接龙王单，别惹孟婆，别信月老」，人已经跑了。",
+        target_chapter_outline="苏迟考公上岸，报到地点是城中村铺面，门牌写「天庭驻人间办事处」被邻居当算命馆。前任留了张纸条「别接龙王单，别惹孟婆，别信月老，别问第十八任去哪了」，人已经跑了。她把纸条贴在门口当免责声明。",
         word_target=600,
         project_id="token_probe",
     )

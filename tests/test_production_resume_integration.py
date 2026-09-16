@@ -72,10 +72,28 @@ _WB_REPORT = {
 
 
 def _patch_build(monkeypatch, draft: str, wb: dict | None = None) -> None:
-    async def _fb(**kw):
-        return _CapturedGraph(draft, wb)
+    async def _fb(initial_state=None, **kw):
+        _CapturedGraph.last_initial_state = initial_state or kw.get("initial_state")
+        return {
+            "draft_content": draft,
+            "quality_gate_passed": True,
+            "quality_gate_report": {"passed": True, "violations": []},
+            "editor_skipped": True,
+            "continuity_skipped": True,
+            "editor_report": {},
+            "continuity_report": {},
+            "worldbuilding_report": wb or {},
+            "worldbuilding_warnings": [],
+            "evolution_history": [],
+            "chapter_number": (initial_state or {}).get("chapter_number", 1),
+            "context_packet": (initial_state or {}).get("context_packet") or {},
+            "scene_plan": [],
+            "scene_drafts": [],
+            "writer_input_tokens": 100,
+            "writer_output_tokens": 200,
+        }
 
-    monkeypatch.setattr(na_mod, "build_chapter_graph_async", _fb)
+    monkeypatch.setattr(na_mod, "run_agent_loop", _fb)
 
 
 def test_production_resume_restores_canon_and_chapters(monkeypatch, tmp_path):
@@ -114,7 +132,7 @@ def test_production_resume_restores_canon_and_chapters(monkeypatch, tmp_path):
     async def _must_not_build(**kw):
         raise AssertionError("resume 命中 approved 章节不应构造 graph")
 
-    monkeypatch.setattr(na_mod, "build_chapter_graph_async", _must_not_build)
+    monkeypatch.setattr(na_mod, "run_agent_loop", _must_not_build)
     adapter_c = NovelAgentAdapter(max_rounds=0, persist_dir=persist, resume=True, label="na_c")
     gen1_again = asyncio.run(adapter_c.generate(_case(1)))
     assert gen1_again.meta["resumed"] is True

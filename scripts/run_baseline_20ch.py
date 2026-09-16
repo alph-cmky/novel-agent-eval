@@ -115,7 +115,7 @@ async def main() -> None:
         "--no-consistency", action="store_true", help="跳过 ConStory（省 API）"
     )
     parser.add_argument(
-        "--max-rounds", type=int, default=0, help="evolution 预算（0=无重写）"
+        "--max-rounds", type=int, default=0, help="legacy 标签字段（S1 不驱动编排；仅写入 manifest/run_tag）"
     )
     parser.add_argument(
         "--v0-gate",
@@ -124,20 +124,20 @@ async def main() -> None:
         help="v0 门控阈值（>=此分跳过重写，<0 禁用）",
     )
     parser.add_argument(
-        "--scene-first", action="store_true", help="Phase4-A: scene_first=true"
+        "--scene-first", action="store_true", help="已排除：S1 拒绝 scene-first（传入将导致 adapter 报错）"
     )
     parser.add_argument(
         "--gate-first",
         dest="gate_first",
         action="store_true",
         default=True,
-        help="Phase4-B: deterministic_gate_first=true（默认开启，Phase4 证实无质量损失且省 59%% token）",
+        help="legacy 标签：S1 主仓库已内建 Hard Gate 条件化审查；此 flag 只影响 run_tag/manifest",
     )
     parser.add_argument(
         "--no-gate-first",
         dest="gate_first",
         action="store_false",
-        help="关闭 deterministic_gate_first（对照用）",
+        help="legacy 标签对照（不关闭主仓库 S1 gate 行为）",
     )
     parser.add_argument(
         "--synthetic-context",
@@ -184,7 +184,7 @@ async def main() -> None:
     # run_tag 带生成模型标签 + Phase4 消融标记：不同 run 不互相覆盖
     gen_model = os.environ.get("QUALITY_MODEL", "unknown")
     model_tag = "".join(c if c.isalnum() else "-" for c in gen_model.lower())
-    phase_tag = ""
+    phase_tag = "_s1"
     if args.scene_first:
         phase_tag += "_scene1"
     if args.gate_first:
@@ -226,7 +226,9 @@ async def main() -> None:
         persist_dir=persist,
         resume=True,
         synthetic_context=args.synthetic_context,
-        label=f"na_s{args.sample}",
+        max_rounds=args.max_rounds,
+        deterministic_gate_first=args.gate_first,
+        label=f"na_s1_s{args.sample}",
     )
     judge = Judge(n_samples=1)
     consistency = None if args.no_consistency else ConStoryCheckerAdapter()

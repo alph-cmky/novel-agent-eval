@@ -2,6 +2,8 @@
 
 `novel-agent` 的评测框架（独立仓库）。评测对象是**生成章节的质量**（横评 / 消融 / 一致性检测），不是训练模型。`novel-agent` 以 editable 依赖引入，是本框架的「信号源」。
 
+S1 编排配对：本仓库分支 `feat/orchestration-s1-conditional-gate-review` 应对主仓库同名分支；Hard Gate 通过时跳过 Editor/Continuity，信号见 adapter meta 的 `editor_skipped` / `continuity_skipped` / `quality_gate_passed`。
+
 ## 启动
 
 ```

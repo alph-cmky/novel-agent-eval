@@ -7,8 +7,8 @@
   synthetic_context 显式反转；DB 结构化 Canon 合并
 - 真实 token trace：per-role + total 聚合，不再为 None
 - context_packet_hash 兜底计算
-- legacy 顶层字段已删除；B-1 默认值与 Production 入口一致（scene_first /
-  deterministic_gate_first = False），可显式注入
+- legacy 顶层字段已删除；S1 不再向 state 注入 scene_first /
+  deterministic_gate_first（gate 条件化在主仓库 loop 内）
 - generate() post-gen 写库在 rmtree 之前（清理顺序回归保护）
 """
 import asyncio
@@ -68,17 +68,24 @@ def test_no_legacy_top_level_fields_in_state():
     assert not (legacy & set(state.keys()))
 
 
-def test_scene_first_and_gate_are_injectable():
-    # B-1 parity：默认与主仓库 API 入口一致（routes.py:636-648）——均为 False
+def test_s1_adapter_rejects_scene_first_and_omits_legacy_gate_flags():
+    # S1：条件化 Hard Gate 在主仓库 agent_loop 内；state 不再注入 scene/gate flags
     default_state = NovelAgentAdapter()._map_initial_state(_case(), persist_dir="/tmp")
-    assert default_state["scene_first"] is False
-    assert default_state["deterministic_gate_first"] is True  # Phase4 消融：默认开启
+    assert "scene_first" not in default_state
+    assert "deterministic_gate_first" not in default_state
 
-    # 消融需要时仍可显式注入 True
-    adapter = NovelAgentAdapter(scene_first=True, deterministic_gate_first=True)
+    adapter = NovelAgentAdapter(deterministic_gate_first=True)
+    assert adapter.orchestration == "s1"
+    assert adapter.deterministic_gate_first is True
     state = adapter._map_initial_state(_case(), persist_dir="/tmp")
-    assert state["scene_first"] is True
-    assert state["deterministic_gate_first"] is True
+    assert "scene_first" not in state
+    assert "deterministic_gate_first" not in state
+
+    try:
+        NovelAgentAdapter(scene_first=True)
+        raise AssertionError("expected ValueError for scene_first=True")
+    except ValueError as exc:
+        assert "scene_first" in str(exc)
 
 
 # ── §0.1 _merge_context_packet ──
@@ -216,6 +223,13 @@ def test_generate_writes_before_cleanup(monkeypatch):
         "orchestrator_input_tokens": 100,
         "writer_input_tokens": 500,
         "writer_output_tokens": 2000,
+        "quality_gate_passed": True,
+        "quality_gate_report": {"passed": True, "violations": []},
+        "editor_skipped": True,
+        "continuity_skipped": True,
+        "worldbuilding_warnings": [],
+        "evolution_history": [],
+        "chapter_number": 2,
     }
 
     class _FakeState:
@@ -231,10 +245,10 @@ def test_generate_writes_before_cleanup(monkeypatch):
         async def aget_state(self, config):
             return _FakeState()
 
-    async def _fake_build(**kw):
-        return _FakeGraph()
+    async def _fake_build(initial_state=None, **kw):
+        return values
 
-    monkeypatch.setattr(na_mod, "build_chapter_graph_async", _fake_build)
+    monkeypatch.setattr(na_mod, "run_agent_loop", _fake_build)
 
     case = EvalCase(
         name="regression_ch02",

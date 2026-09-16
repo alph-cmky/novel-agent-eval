@@ -38,7 +38,7 @@ class _FakeState:
 
 
 class _FakeGraph:
-    """固定产出 draft；build_calls 记录 build_chapter_graph_async 调用次数。"""
+    """固定产出 draft；build_calls 记录 run_agent_loop 调用次数。"""
 
     def __init__(self, draft):
         self.values = {
@@ -61,14 +61,27 @@ class _FakeGraph:
 
 
 def _patch_build(monkeypatch, draft):
-    """让 build_chapter_graph_async 返回固定 fake graph；返回调用计数列表。"""
+    """让 run_agent_loop 返回固定 final state；返回调用计数列表。"""
     calls = [0]
 
-    async def _fb(**kw):
+    async def _fb(initial_state=None, **kw):
         calls[0] += 1
-        return _FakeGraph(draft)
+        return {
+            "draft_content": draft,
+            "quality_gate_passed": True,
+            "quality_gate_report": {"passed": True, "violations": []},
+            "editor_skipped": True,
+            "continuity_skipped": True,
+            "editor_report": {},
+            "continuity_report": {},
+            "worldbuilding_report": {},
+            "worldbuilding_warnings": [],
+            "evolution_history": [],
+            "chapter_number": (initial_state or {}).get("chapter_number", 1),
+            "context_packet": (initial_state or {}).get("context_packet") or {},
+        }
 
-    monkeypatch.setattr(na_mod, "build_chapter_graph_async", _fb)
+    monkeypatch.setattr(na_mod, "run_agent_loop", _fb)
     return calls
 
 

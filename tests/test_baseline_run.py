@@ -57,10 +57,27 @@ class _FakeGraph:
 
 
 def _patch_build(monkeypatch, draft):
-    async def _fb(**kw):
-        return _FakeGraph(draft)
+    async def _fb(initial_state=None, **kw):
+        return {
+            "draft_content": draft,
+            "quality_gate_passed": True,
+            "quality_gate_report": {"passed": True, "violations": []},
+            "editor_skipped": True,
+            "continuity_skipped": True,
+            "editor_report": {},
+            "continuity_report": {},
+            "worldbuilding_report": {},
+            "worldbuilding_warnings": [],
+            "evolution_history": [],
+            "chapter_number": (initial_state or {}).get("chapter_number", 1),
+            "context_packet": (initial_state or {}).get("context_packet") or {},
+            "writer_input_tokens": 100,
+            "writer_output_tokens": 200,
+            "orchestrator_input_tokens": 50,
+            "orchestrator_output_tokens": 20,
+        }
 
-    monkeypatch.setattr(na_mod, "build_chapter_graph_async", _fb)
+    monkeypatch.setattr(na_mod, "run_agent_loop", _fb)
 
 
 class _FakeJudge:
@@ -137,7 +154,7 @@ def test_run_baseline_resume_scores_from_db(monkeypatch, tmp_path):
         build_calls[0] += 1
         return _FakeGraph("不应被调用")
 
-    monkeypatch.setattr(na_mod, "build_chapter_graph_async", _fb)
+    monkeypatch.setattr(na_mod, "run_agent_loop", _fb)
     adapter_b = NovelAgentAdapter(max_rounds=0, persist_dir=persist, resume=True, label="na_b")
     result = asyncio.run(run_baseline(
         adapter=adapter_b, judge=_FakeJudge(),

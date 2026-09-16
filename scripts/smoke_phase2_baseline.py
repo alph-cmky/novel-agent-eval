@@ -1,6 +1,8 @@
 # scripts/smoke_phase2_baseline.py
 """Phase 2 baseline harness 真实验证（耗 API，不进 pytest/CI）。
 
+配对主仓库 S1 分支 feat/orchestration-s1-conditional-gate-review。
+
 3 章 durable + 真 Judge + 真 ConStory，验证 run_baseline 端到端：
 run_durable → V2 DB 读 content → Judge/ConStory 评分 → BaselineRunResult + Go/No-Go。
 非正式 baseline（仅 1×1×3），正式需 6 prompts × 3 repeats × 20 chapters。

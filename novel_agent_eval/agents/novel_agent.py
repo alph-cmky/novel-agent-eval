@@ -1,11 +1,17 @@
 # novel_agent_eval/agents/novel_agent.py
-"""novel-agent 适配器：跑主仓库 C5 agent loop 生成章节。
+"""novel-agent 适配器：跑主仓库 S1 / C5 agent loop 生成章节。
 
-调用范式：
-1. run_agent_loop(initial_state) 跑 Orchestrator → Writer loop → Editor → Continuity → Worldbuilding
-2. 评测自动 approve human_review（loop 内无人审 interrupt）
+配对主仓库分支：``feat/orchestration-s1-conditional-gate-review``。
 
-EvalCase → initial_state 字段映射见 _map_initial_state。
+调用范式（S1）：
+1. ``run_agent_loop(initial_state)``：
+   Orchestrator → Writer tool loop → Hard Gate
+   → PASS：跳过 Editor + Continuity
+   → FAIL：Editor（rewrite 有界重入）→ Continuity
+   → Worldbuilding → 返回（评测侧自动 approve / commit）
+2. loop 内无人审 interrupt；空稿抛 ``EmptyDraftError``。
+
+EvalCase → initial_state 字段映射见 ``_map_initial_state``。
 persist_dir 缺省用每次调用的临时目录——不能传 ""，否则 ChromaDB 会在 cwd 落盘。
 """
 
@@ -19,7 +25,7 @@ import zlib
 from pathlib import Path
 
 from novel_agent.api.run_service import ChapterRunService
-from novel_agent.graph.agent_loop import run_agent_loop
+from novel_agent.graph.agent_loop import EmptyDraftError, run_agent_loop
 from novel_agent.memory.embeddings import ChapterStore
 from novel_agent.services.context import ContextCompiler
 from novel_agent.storage.manager import ProjectManager
@@ -33,13 +39,17 @@ _STAGE_TO_STORY_LENGTH = {"opening": "short", "middle": "medium", "long": "long"
 
 
 class NovelAgentAdapter:
-    """把主仓库完整流水线收敛成 generate(case) 接口。
+    """把主仓库 S1 流水线收敛成 generate(case) 接口。
 
-    ``max_rounds`` 控制单章最多进行多少轮自动进化。
-    主仓库当前仍构建同一套递归进化图，因此该开关不是完整的“无进化”对照。
+    S1 下 Hard Gate 条件化审查写在主仓库 ``agent_loop`` 内，适配器不再注入
+    ``deterministic_gate_first`` / ``scene_first`` 到 state。
+
+    仍接受 ``max_rounds`` / ``scene_first`` / ``deterministic_gate_first`` 关键字，
+    仅为兼容旧脚本与消融工厂；S1 路径上它们不改变编排（scene-first 禁止启用）。
     """
 
     name = "novel_agent"
+    orchestration = "s1"
 
     def __init__(
         self,
@@ -49,9 +59,15 @@ class NovelAgentAdapter:
         resume: bool = False,
         project_id: str = "",
         synthetic_context: bool = False,
+        max_rounds: int | None = None,
+        scene_first: bool = False,
+        deterministic_gate_first: bool = True,
     ):
+        if scene_first:
+            raise ValueError(
+                "S1 adapter rejects scene_first=True (scene-first is excluded by eval evidence)"
+            )
         self.skip_orchestrator = skip_orchestrator
-        # B-1 parity：默认值与主仓库 API 入口 initial_state（routes.py:636-650）一致
         # resume=True：跨进程恢复——按 name 复用已有 Project，已 approved 章节不重生。
         # V2 durable state（Project/ChapterVersion/Canon）即真相源，不依赖 eval 侧 checkpoint。
         self.resume = resume
@@ -59,6 +75,10 @@ class NovelAgentAdapter:
         # B-3：默认 False → 上下文以 V2 DB（真实 Production ContextCompiler）为准；
         # 仅专门测试「有限 harness context」的 benchmark 才置 True（显式标记）。
         self.synthetic_context = synthetic_context
+        # Legacy ablation knobs (ignored by S1 agent_loop control flow).
+        self.max_rounds = max_rounds
+        self.scene_first = False
+        self.deterministic_gate_first = deterministic_gate_first
         if label:
             self.name = label
         # None → 每次 generate 用临时目录；也可显式指定（持久化调试用）
@@ -423,6 +443,15 @@ class NovelAgentAdapter:
             "human_approved": values.get("human_approved"),
             "elapsed_seconds": round(elapsed, 3),
             "workflow_version": "v2",
+            "orchestration": "s1",
+            "quality_gate_passed": values.get("quality_gate_passed"),
+            "quality_gate_report": values.get("quality_gate_report") or {},
+            "editor_skipped": bool(values.get("editor_skipped")),
+            "continuity_skipped": bool(values.get("continuity_skipped")),
+            "worldbuilding_warnings": list(values.get("worldbuilding_warnings") or []),
+            "revision_feedback_consumed": bool(
+                values.get("revision_feedback_consumed")
+            ),
             # 主仓库未在 state 落 hash 时，由最终 context_packet 计算，保证可复现
             "context_packet_hash": values.get("context_packet_hash")
             or NovelAgentAdapter._packet_hash(values.get("context_packet") or {}),
@@ -544,7 +573,10 @@ class NovelAgentAdapter:
                 initial_state["writing_run_id"] = run["id"]
 
             start = time.monotonic()
-            values = await run_agent_loop(initial_state)
+            try:
+                values = await run_agent_loop(initial_state)
+            except EmptyDraftError as exc:
+                raise RuntimeError(f"empty content from S1 pipeline: {exc}") from exc
             elapsed = time.monotonic() - start
         finally:
             pass
@@ -552,9 +584,8 @@ class NovelAgentAdapter:
         # post-gen DB writes 必须在 persist_dir rmtree 之前：attach_candidate / commit
         # 读写 novel.db，清理过早会让 get_writing_run 返回 None。
         content = (values.get("draft_content") or "").strip()
-        # Rule Gate（§3.1 正文非空）：writer 空输出（如 tool 循环耗尽轮次）时
-        # 不允许静默返回成功——空章节既不会 commit，也必须以 generation 失败
-        # 上抛，让 run_durable 记 invalid，而不是伪装成 completed。
+        # Rule Gate（§3.1 正文非空）：S1 通常在 loop 内抛 EmptyDraftError；
+        # 此处兜底防止空章节被伪装成 completed。
         if not content:
             gate = values.get("quality_gate_report") or {}
             raise RuntimeError(
@@ -593,6 +624,8 @@ class NovelAgentAdapter:
                 cleanup()
         meta = self._extract_meta(values, elapsed)
         meta["synthetic_context"] = self.synthetic_context
+        meta["adapter_max_rounds"] = self.max_rounds
+        meta["adapter_deterministic_gate_first"] = self.deterministic_gate_first
         if run:
             meta.update(
                 {

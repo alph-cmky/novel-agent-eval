@@ -192,9 +192,10 @@ async def main() -> None:
     if args.synthetic_context:
         phase_tag += "_synctx"
     pv_tag = PROMPT_VERSION.rsplit("-", 1)[-1]
+    suffix = os.environ.get("EVAL_TAG_SUFFIX", "")
     run_tag = (
         f"baseline{args.chapters}_{args.chapters}ch_s{args.sample}"
-        f"_r{args.max_rounds}_{model_tag}{phase_tag}_{pv_tag}"
+        f"_r{args.max_rounds}_{model_tag}{phase_tag}_{pv_tag}{suffix}"
     )
     out_dir = VAULT_EVAL_DATA / run_tag
     out_dir.mkdir(parents=True, exist_ok=True)

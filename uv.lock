@@ -1389,7 +1389,7 @@ wheels = [
 [[package]]
 name = "novel-agent"
 version = "0.1.0"
-source = { editable = "../novel-agent" }
+source = { editable = "../novel-agent-discourse" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "chromadb" },
@@ -1465,7 +1465,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.3" },
     { name = "huggingface-hub", specifier = ">=0.24.0" },
-    { name = "novel-agent", editable = "../novel-agent" },
+    { name = "novel-agent", editable = "../novel-agent-discourse" },
     { name = "openai", specifier = ">=3.0.0" },
     { name = "pandas", specifier = ">=3.0.5" },
     { name = "pyarrow", specifier = ">=25.0.1" },

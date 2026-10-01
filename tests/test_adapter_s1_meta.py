@@ -19,7 +19,9 @@ def test_extract_meta_includes_s1_gate_skip_fields():
         "writer_output_tokens": 5,
     }
     meta = NovelAgentAdapter._extract_meta(values, elapsed=1.25)
-    assert meta["orchestration"] == "s1"
+    assert meta["orchestration"] == "discourse"
+    assert meta["contract_report"] == {}
+    assert meta["surface_applied"] is False
     assert meta["quality_gate_passed"] is True
     assert meta["editor_skipped"] is True
     assert meta["continuity_skipped"] is True
@@ -28,4 +30,4 @@ def test_extract_meta_includes_s1_gate_skip_fields():
 
 
 def test_adapter_orchestration_constant():
-    assert NovelAgentAdapter().orchestration == "s1"
+    assert NovelAgentAdapter().orchestration == "discourse"

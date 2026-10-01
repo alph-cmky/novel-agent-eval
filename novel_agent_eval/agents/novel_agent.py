@@ -1,7 +1,7 @@
 # novel_agent_eval/agents/novel_agent.py
-"""novel-agent 适配器：跑主仓库 S1 / C5 agent loop 生成章节。
+"""novel-agent 适配器：跑主仓库话语合同编排生成章节。
 
-配对主仓库分支：``feat/orchestration-s1-conditional-gate-review``。
+配对主仓库分支：``feat/discourse-canon-review``（目录 ``novel-agent-discourse``）。
 
 调用范式（S1）：
 1. ``run_agent_loop(initial_state)``：
@@ -49,7 +49,7 @@ class NovelAgentAdapter:
     """
 
     name = "novel_agent"
-    orchestration = "s1"
+    orchestration = "discourse"
 
     def __init__(
         self,
@@ -443,8 +443,17 @@ class NovelAgentAdapter:
             "human_approved": values.get("human_approved"),
             "elapsed_seconds": round(elapsed, 3),
             "workflow_version": "v2",
-            "orchestration": "s1",
+            "orchestration": "discourse",
             "quality_gate_passed": values.get("quality_gate_passed"),
+            "timeline_passed": values.get("timeline_passed"),
+            "discourse_contract": (
+                (values.get("orchestrator_strategy") or {}).get("discourse_contract")
+                or {}
+            ),
+            "contract_report": values.get("contract_report") or {},
+            "contract_passed": values.get("contract_passed"),
+            "revision_brief": values.get("revision_brief") or "",
+            "surface_applied": bool(values.get("surface_applied")),
             "quality_gate_report": values.get("quality_gate_report") or {},
             "editor_skipped": bool(values.get("editor_skipped")),
             "continuity_skipped": bool(values.get("continuity_skipped")),

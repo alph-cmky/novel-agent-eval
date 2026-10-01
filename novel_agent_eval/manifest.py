@@ -61,7 +61,7 @@ def build_run_manifest(config: dict[str, Any], prompt_path: Path) -> dict[str, A
     """Build run metadata without including credentials or full prompt text."""
     eval_root = Path(__file__).resolve().parents[1]
     novel_root = Path(
-        os.environ.get("NOVEL_AGENT_PATH", str(eval_root.parent / "novel-agent"))
+        os.environ.get("NOVEL_AGENT_PATH", str(eval_root.parent / "novel-agent-discourse"))
     )
     safe_config = {
         key: value

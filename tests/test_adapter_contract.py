@@ -75,7 +75,7 @@ def test_s1_adapter_rejects_scene_first_and_omits_legacy_gate_flags():
     assert "deterministic_gate_first" not in default_state
 
     adapter = NovelAgentAdapter(deterministic_gate_first=True)
-    assert adapter.orchestration == "s1"
+    assert adapter.orchestration == "discourse"
     assert adapter.deterministic_gate_first is True
     state = adapter._map_initial_state(_case(), persist_dir="/tmp")
     assert "scene_first" not in state

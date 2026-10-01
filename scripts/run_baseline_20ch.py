@@ -184,7 +184,7 @@ async def main() -> None:
     # run_tag 带生成模型标签 + Phase4 消融标记：不同 run 不互相覆盖
     gen_model = os.environ.get("QUALITY_MODEL", "unknown")
     model_tag = "".join(c if c.isalnum() else "-" for c in gen_model.lower())
-    phase_tag = "_s1"
+    phase_tag = "_discourse"
     if args.scene_first:
         phase_tag += "_scene1"
     if args.gate_first:
@@ -192,9 +192,10 @@ async def main() -> None:
     if args.synthetic_context:
         phase_tag += "_synctx"
     pv_tag = PROMPT_VERSION.rsplit("-", 1)[-1]
+    suffix = os.environ.get("EVAL_TAG_SUFFIX", "")
     run_tag = (
         f"baseline{args.chapters}_{args.chapters}ch_s{args.sample}"
-        f"_r{args.max_rounds}_{model_tag}{phase_tag}_{pv_tag}"
+        f"_r{args.max_rounds}_{model_tag}{phase_tag}_{pv_tag}{suffix}"
     )
     out_dir = VAULT_EVAL_DATA / run_tag
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -228,7 +229,7 @@ async def main() -> None:
         synthetic_context=args.synthetic_context,
         max_rounds=args.max_rounds,
         deterministic_gate_first=args.gate_first,
-        label=f"na_s1_s{args.sample}",
+        label=f"na_discourse_s{args.sample}",
     )
     judge = Judge(n_samples=1)
     consistency = None if args.no_consistency else ConStoryCheckerAdapter()
